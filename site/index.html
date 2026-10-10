@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Is This A Mimic? — Download</title>
+<meta name="description" content="Is This A Mimic?: a D&amp;D 5e inventory manager for Windows, Android and the browser. Track gear, coins and encumbrance, and trade with your party.">
+<link rel="icon" href="app/icons/icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #f4ecdc; --surface: #fffaf0; --surface-2: #efe5d1; --border: #dccfb5;
+    --text: #2b2319; --muted: #7a6b56; --accent: #a4431f; --accent-text: #fff; --accent-soft: #f3d9c9;
+    --shadow: 0 1px 2px rgb(60 40 10 / .08), 0 4px 16px rgb(60 40 10 / .06);
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --display: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #1b1814; --surface: #252019; --surface-2: #2f2920; --border: #3d352a;
+      --text: #efe6d6; --muted: #a5977f; --accent: #e0864f; --accent-text: #1b1814; --accent-soft: #4a2e1d;
+      --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #1b1814; --surface: #252019; --surface-2: #2f2920; --border: #3d352a;
+    --text: #efe6d6; --muted: #a5977f; --accent: #e0864f; --accent-text: #1b1814; --accent-soft: #4a2e1d;
+    --shadow: 0 1px 2px rgb(0 0 0 / .3), 0 6px 20px rgb(0 0 0 / .25);
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.55 var(--font); }
+  a { color: var(--accent); }
+  .wrap { max-width: 960px; margin: 0 auto; padding: 0 16px; }
+
+  header { padding: 56px 0 28px; text-align: center; }
+  header img { width: 88px; height: 88px; border-radius: 20px; box-shadow: var(--shadow); }
+  h1 { font: 700 clamp(2.2rem, 6vw, 3.2rem)/1.1 var(--display); margin: 18px 0 8px; letter-spacing: -.01em; }
+  .tagline { font-size: 1.15rem; color: var(--muted); max-width: 34em; margin: 0 auto; }
+  .version { margin-top: 14px; font-size: .9rem; color: var(--muted); min-height: 1.4em; }
+
+  .downloads { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 16px; margin: 20px 0 48px; }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 22px; box-shadow: var(--shadow);
+          display: flex; flex-direction: column; gap: 10px; }
+  .card h2 { font: 700 1.3rem/1.2 var(--display); margin: 0; display: flex; align-items: center; gap: 10px; }
+  .card h2 svg { width: 26px; height: 26px; flex: none; color: var(--accent); }
+  .card p { margin: 0; color: var(--muted); font-size: .95rem; }
+  .card .spacer { flex: 1; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 46px; padding: 0 18px;
+         border-radius: 10px; font: 600 1rem var(--font); text-decoration: none; border: 1px solid var(--border);
+         background: var(--surface-2); color: var(--text); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+  .btn:hover { filter: brightness(1.06); }
+  .btn:focus-visible { outline: 3px solid var(--accent-soft); outline-offset: 2px; }
+  .btn svg { width: 18px; height: 18px; }
+  .size { font-size: .85rem; color: var(--muted); text-align: center; min-height: 1.3em; }
+  details { font-size: .9rem; color: var(--muted); }
+  details summary { cursor: pointer; color: var(--text); }
+  details ol { margin: 8px 0 0; padding-left: 20px; }
+
+  section h2.title { font: 700 1.6rem/1.2 var(--display); margin: 0 0 16px; }
+  .features { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px 28px; margin: 0 0 48px; padding: 0; list-style: none; }
+  .features li { padding-left: 16px; border-left: 3px solid var(--accent-soft); }
+  .features b { display: block; }
+  .features span { color: var(--muted); font-size: .95rem; }
+
+  footer { border-top: 1px solid var(--border); padding: 24px 0 40px; font-size: .85rem; color: var(--muted); }
+  footer p { margin: 0 0 8px; }
+</style>
+</head>
+<body>
+<header class="wrap">
+  <img src="app/icons/icon-192.png" alt="" width="88" height="88">
+  <h1>Is This A Mimic?</h1>
+  <p class="tagline">A D&amp;D 5e inventory manager. Track gear, coins and encumbrance, pack your bags, and trade with your party over your home Wi-Fi.</p>
+  <p class="version" id="version"></p>
+</header>
+
+<main class="wrap">
+  <div class="downloads">
+    <div class="card">
+      <h2><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 5.5 10 4.5v7H3zM11 4.3 21 3v8.5H11zM3 12.5h7v7L3 18.5zM11 12.5h10V21l-10-1.4z"/></svg>Windows</h2>
+      <p>One file, nothing to install. Double-click to open the app in its own window. Can host a party for everyone on your network.</p>
+      <div class="spacer"></div>
+      <a class="btn primary" id="dl-exe" href="https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/IsThisAMimic.exe">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>Download IsThisAMimic.exe</a>
+      <div class="size" id="size-exe">Windows 10 or 11</div>
+      <details><summary>Windows says it protected your PC?</summary>
+        <ol><li>The app isn't code-signed, so SmartScreen warns about new downloads.</li><li>Click <b>More info</b>, then <b>Run anyway</b>.</li></ol></details>
+    </div>
+
+    <div class="card">
+      <h2><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18a.4.4 0 0 0-.69-.4l-1.87 3.23a11.4 11.4 0 0 0-9.76 0L5.25 5.9a.4.4 0 0 0-.69.4L6.4 9.48A10.8 10.8 0 0 0 1 18h22a10.8 10.8 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>Android</h2>
+      <p>Your characters on your phone. Scan the host's QR code to join a party, or host one yourself.</p>
+      <div class="spacer"></div>
+      <a class="btn primary" id="dl-apk" href="https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/IsThisAMimic.apk">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m0 0-5-5m5 5 5-5M4 21h16"/></svg>Download IsThisAMimic.apk</a>
+      <div class="size" id="size-apk">Android 7.0 or newer</div>
+      <details><summary>How do I install an APK?</summary>
+        <ol><li>Open the downloaded file on your phone.</li><li>If asked, allow your browser to <b>install unknown apps</b>.</li><li>Tap <b>Install</b>.</li></ol></details>
+    </div>
+
+    <div class="card">
+      <h2><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/></svg>In your browser</h2>
+      <p>Nothing to download. Works offline after the first visit, and your browser can install it like an app. Data stays in that browser.</p>
+      <div class="spacer"></div>
+      <a class="btn" href="app/">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M7 17 17 7M9 7h8v8"/></svg>Open the app</a>
+      <div class="size">Any modern browser, PC or phone</div>
+    </div>
+  </div>
+
+  <section>
+    <h2 class="title">What it does</h2>
+    <ul class="features">
+      <li><b>Inventory &amp; encumbrance</b><span>Backpacks, pouches and chests hold things; weight, carrying capacity and fill gauges update as you pack.</span></li>
+      <li><b>Coins that make change</b><span>Buy and sell with automatic change, gain, spend and consolidate coins.</span></li>
+      <li><b>Catalog</b><span>Core SRD weapons, armor, gear, tools, packs, poisons and trade goods, plus custom items from templates.</span></li>
+      <li><b>Combat panel</b><span>To-hit, damage, range and ammunition for everything you have equipped.</span></li>
+      <li><b>Party mode</b><span>One player hosts; everyone joins on the same Wi-Fi with a QR code, trades items and coins, and shops.</span></li>
+      <li><b>Documents &amp; decks</b><span>Letters, maps and handouts with a reader; decks of cards you can draw from.</span></li>
+    </ul>
+  </section>
+</main>
+
+<footer class="wrap">
+  <p><a href="https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki">User guide</a> · <a href="https://github.com/jonathansatterthwaite-stack/is-this-a-mimic">Source on GitHub</a> · <a href="https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases">All releases</a></p>
+  <p>This work includes material from the System Reference Document 5.1 ("SRD 5.1") by Wizards of the Coast LLC, available at
+    <a href="https://dnd.wizards.com/resources/systems-reference-document">dnd.wizards.com/resources/systems-reference-document</a>,
+    licensed under the <a href="https://creativecommons.org/licenses/by/4.0/legalcode">Creative Commons Attribution 4.0 International License</a>.
+    Item icons from <a href="https://game-icons.net">game-icons.net</a> under CC BY 3.0.
+    The icon editor's text uses the fonts Alegreya, Nunito and Caveat (SIL Open Font License 1.1).</p>
+  <p>Is This A Mimic? is an unofficial fan tool, not affiliated with or endorsed by Wizards of the Coast.</p>
+</footer>
+
+<script>
+// Show the latest release's version and file sizes (the buttons work without this).
+fetch("https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest")
+  .then(r => r.ok ? r.json() : null)
+  .then(rel => {
+    if (!rel) return;
+    const date = new Date(rel.published_at).toLocaleDateString(undefined, { year: "numeric", month: "long", day: "numeric" });
+    document.getElementById("version").textContent = `Latest version ${rel.tag_name} · ${date}`;
+    for (const a of rel.assets || []) {
+      const id = a.name.endsWith(".exe") ? "size-exe" : a.name.endsWith(".apk") ? "size-apk" : null;
+      const el = id && document.getElementById(id);
+      if (el) el.textContent = `${(a.size / 1e6).toFixed(1)} MB · ${el.textContent}`;
+    }
+  })
+  .catch(() => {});
+</script>
+</body>
+</html>

@@ -1,0 +1,919 @@
+// Control panels: the GM's own panels of controls, laid out on a grid (boards with pins are in
+// js/gm-controls.js; both are Clockwork controls, see js/clockwork.js). Each control sets a
+// Global or Local value, or is just a picture or text.
+//
+// Kept with the boards in store.state.gmControls (the GM's device):
+//   { id, kind: "panel", name, cols, rows, controls: [ctl] }
+//   ctl: { id, type, x, y, w, h,           its place on the grid (square cells, from 0 at the top left)
+//          label?, color?, icon?,          icon: a built-in icon; or a drawing, kept as items keep
+//          iconDoc?, iconSvg?, iconLib?    theirs (a copy, and the library drawing it came from):
+//                                          the Picture control (type "icon") and buttons show it,
+//                                          live with the Global values it reads
+//          tab?                            the tab it shows on (see Tabs controls below); none: always
+//          reverse?                        slider and switch: more (on) is left or down, not right
+//                                          or up (taller than wide, they stand upright)
+//          scope, target, name,            the value it sets: scope "party" (a Global), "character"
+//                                          or "item" (Locals), as boards' pins do
+//          min, max, step                  slider and range slider (default: the value's own range)
+//          name2                           range slider: the upper value (name is the lower)
+//          vertices: [{ label, name, amount }], at: { x, y }
+//                                          polygon: a corner per value; the handle (at, 0 to 1 across
+//                                          and down) gives each corner's value amount × closeness
+//          off, on                         switch (default 0 and 1)
+//          action: "set" | "add", amount   button
+//          options: [{ label, value }]     dropdown (default: the value's choices, else Off and On)
+//          choose: "players"               dropdown: the party's characters instead, setting no value:
+//                                          whose Local values its pictures show (see Players dropdowns)
+//          from                            a Players dropdown on the panel: a picture shows the Local
+//                                          values of whoever is chosen in it, a control that sets values
+//                                          sets theirs (scope "character"; else scope/target as above)
+//          board: { image?, layers?, pins } board: a picture with pins (see gmBoard, js/gm-controls.js)
+//          levels, items: [tab]            tabs: a tree of tabs, levels deep (see Tabs controls below);
+//                                          a tab's picture: icon, or a drawing (iconDoc, iconSvg, iconLib) }
+
+const CONTROL_TYPES = [["slider", "Slider"], ["range", "Range slider"], ["toggle", "Switch"], ["button", "Button"], ["dropdown", "Dropdown"],
+  ["polygon", "Polygon"], ["board", "Board"], ["tabs", "Tabs"], ["icon", "Picture"], ["text", "Text"]];
+// The kinds offered when making one, in groups: a range slider is a slider with two handles (Handles).
+const CONTROL_KINDS = CONTROL_TYPES.filter(([k]) => k !== "range");
+const CONTROL_GROUPS = [["Layout", ["tabs"]], ["Display", ["text", "icon"]], ["Interactive", ["slider", "toggle", "button", "dropdown", "polygon", "board"]]];
+const SETS_VALUE = new Set(["slider", "toggle", "button", "dropdown"]); // one value, `name`
+const isUpright = ctl => ctl.h > ctl.w;
+// A control's picture: its drawing (live with the Global values it reads, and the Local values of
+// `whose`: [charId, entryUid]), else its built-in icon.
+function controlPicture(ctl, cls, fallback = null, whose = ["", ""]) {
+  if (ctl.iconSvg && ctl.iconDoc) return isLiveDrawing(ctl.iconDoc)
+    ? liveDrawnIcon(ctl.iconDoc, ctl.iconSvg, cls, () => iconValueVars(...whose))
+    : drawnIcon(ctl.iconSvg, cls) || iconSvg("image", cls);
+  const id = ctl.icon || fallback;
+  return id ? iconSvg(id, cls) : null;
+}
+// ------------------------------------------------------------------ Players dropdowns
+// A dropdown can list the party's characters (choose: "players") instead of setting a value: the
+// Picture controls linked to it (from: its id) show the Local values of whoever is chosen. What's
+// chosen is this device's, as tabs are: ui.panelPick["panelId/dropdownId"] (else the first).
+const isPlayersDropdown = c => c?.type === "dropdown" && c.choose === "players";
+function chosenPlayer(panel, dd) {
+  const chars = gmChars(), saved = ui.panelPick[`${panel.id}/${dd.id}`];
+  return (chars.find(c => c.id === saved) || chars[0])?.id || "";
+}
+// A control that sets values for whoever is chosen in a Players dropdown: as one for that player.
+function forChosen(panel, ctl) {
+  if (!ctl.from || ctl.type === "icon" || isPlayersDropdown(ctl)) return ctl;
+  const dd = panel.controls.find(c => c.id === ctl.from);
+  return isPlayersDropdown(dd) ? { ...ctl, scope: "character", target: chosenPlayer(panel, dd) } : ctl;
+}
+// Whose Local values a picture shows: [charId, entryUid] (none: Global values only).
+function pictureWhose(panel, ctl) {
+  if (ctl.from) { const dd = panel.controls.find(c => c.id === ctl.from); return [isPlayersDropdown(dd) ? chosenPlayer(panel, dd) : "", ""]; }
+  if (ctl.scope === "character") return [ctl.target || "", ""];
+  if (ctl.scope === "item") { const [c, u] = String(ctl.target || "").split("/"); return [c || "", u || ""]; }
+  return ["", ""];
+}
+
+// The pictures a panel's boards use (so exports carry them).
+const panelImages = panel => (panel.controls || []).flatMap(c => [c.board?.image, ...(c.board?.layers || []).map(l => l.image)]).filter(Boolean);
+
+// The value a control shows: as it's set where the control applies, else the value's default.
+const specOfControl = (ctl, specs) => specs.get(`${ctl.scope === "party" ? "global" : "local"}:${ctl.name}`);
+function controlValue(ctl, specs) {
+  const v = ctl.name ? valueAt(ctl.scope, ctl.target, valueKey(ctl.name)) : undefined;
+  return v ?? specOfControl(ctl, specs)?.value ?? 0;
+}
+const sendControl = (ctl, value) => sendNamed(ctl, ctl.name, value);
+// Through Clockwork (js/clockwork.js), as the GM: set (resolves when the party has it), or shown on
+// this device's live icons at once while it's dragged (preview), until it's let go (settle).
+const sendNamed = (ctl, name, value) => clockwork.change(...clockwork.at(ctl.scope, ctl.target, name), value, "gm").done;
+const previewNamed = (ctl, name, value) => clockwork.preview(...clockwork.at(ctl.scope, ctl.target, name), value);
+const settle = sending => Promise.resolve(sending).finally(() => clockwork.endPreview());
+// Another of a control's values (a range slider's upper, a polygon's corners): as set, else its default.
+const namedSpec = (ctl, name, specs) => specs.get(`${ctl.scope === "party" ? "global" : "local"}:${name}`);
+const namedValue = (ctl, name, specs, fallback) => (name ? valueAt(ctl.scope, ctl.target, valueKey(name)) : undefined) ?? namedSpec(ctl, name, specs)?.value ?? fallback;
+
+// A drag on a control of the app's own (the range slider, the polygon): party updates wait until
+// it's let go. start(ev) when pressed, move(ev) for the press and each move, end() when let go.
+function dragOn(el, start, move, end) {
+  el.addEventListener("pointerdown", ev => {
+    if (ev.button > 0) return;
+    ev.preventDefault();
+    try { el.setPointerCapture(ev.pointerId); } catch {}
+    holdRender(true);
+    // Whatever happens, letting go ends it (and lets party updates through again).
+    const up = () => {
+      el.removeEventListener("pointermove", move);
+      el.removeEventListener("pointerup", up);
+      el.removeEventListener("pointercancel", up);
+      try { end(); } finally { holdRender(false); }
+    };
+    el.addEventListener("pointermove", move);
+    el.addEventListener("pointerup", up);
+    el.addEventListener("pointercancel", up);
+    start?.(ev);
+    move(ev);
+  });
+}
+// Sending while something moves: at most every 150 ms (soon), and at once when it stops (now).
+function throttled(send) {
+  let timer = null, last = 0;
+  const now = () => { clearTimeout(timer); timer = null; last = Date.now(); return send(); };
+  return { now, soon: () => { if (!timer) timer = setTimeout(now, Math.max(0, 150 - (Date.now() - last))); } };
+}
+// Keep a square as large as its box allows (a polygon's).
+function fitSquare(box, sq) {
+  const fit = () => { const s = Math.min(box.clientWidth, box.clientHeight); if (s) { sq.style.width = s + "px"; sq.style.height = s + "px"; } };
+  new ResizeObserver(fit).observe(box);
+  setTimeout(fit); // the observer waits for a frame, which a hidden window doesn't draw
+}
+
+// ------------------------------------------------------------------ the range slider
+
+function rangeControl(ctl, specs, label) {
+  const spec = namedSpec(ctl, ctl.name, specs);
+  const a0 = ctl.min ?? spec?.min ?? 0, b0 = ctl.max ?? spec?.max ?? 1, step = ctl.step ?? spec?.step;
+  const from = Math.min(a0, b0), to = Math.max(a0, b0), span = to - from || 1;
+  const snap = v => {
+    v = Math.max(from, Math.min(to, v));
+    if (typeof step === "number" && step > 0) v = from + Math.round((v - from) / step) * step;
+    return Math.round(v * 1000) / 1000;
+  };
+  let lo = snap(namedValue(ctl, ctl.name, specs, from)), hi = snap(namedValue(ctl, ctl.name2, specs, to));
+  if (lo > hi) [lo, hi] = [hi, lo];
+  const up = isUpright(ctl), rev = !!ctl.reverse;
+  const thumbLo = h("button", { type: "button", class: "cp-thumb", "aria-label": `${label || "Range"}: from` });
+  const thumbHi = h("button", { type: "button", class: "cp-thumb", "aria-label": `${label || "Range"}: to` });
+  const fill = h("div", { class: "cp-fill" });
+  const track = h("div", { class: "cp-track" + (up ? " upright" : "") }, fill, thumbLo, thumbHi);
+  const out = h("output", { class: "cp-out" });
+  // Where a value sits along the track: 0 at the left (or bottom), 1 at the right (or top).
+  const posOf = v => { const t = (v - from) / span; return rev ? 1 - t : t; };
+  const place = () => {
+    const a = posOf(lo), b = posOf(hi), s = Math.min(a, b), e = Math.max(a, b);
+    for (const [el, p] of [[thumbLo, a], [thumbHi, b]]) el.style[up ? "bottom" : "left"] = p * 100 + "%";
+    fill.style[up ? "bottom" : "left"] = s * 100 + "%";
+    fill.style[up ? "height" : "width"] = (e - s) * 100 + "%";
+    out.textContent = `${fmtNum(lo)} – ${fmtNum(hi)}`;
+  };
+  place();
+  const sender = throttled(() => Promise.all([sendNamed(ctl, ctl.name, lo), sendNamed(ctl, ctl.name2, hi)]));
+  const valueAtPointer = ev => {
+    const r = track.getBoundingClientRect();
+    if (!r.width || !r.height) return up ? hi : lo; // not on screen
+    let t = up ? 1 - (ev.clientY - r.top) / r.height : (ev.clientX - r.left) / r.width;
+    t = Math.max(0, Math.min(1, t));
+    return snap(from + (rev ? 1 - t : t) * span);
+  };
+  // Which handle a press takes: the one pressed, else the nearer; with both in one place, the
+  // way it's then dragged decides.
+  let which = null;
+  dragOn(track, ev => {
+    const v = valueAtPointer(ev);
+    which = lo === hi && (v === lo || ev.target.classList.contains("cp-thumb")) ? null
+      : ev.target === thumbLo ? "lo" : ev.target === thumbHi ? "hi" : v > hi ? "hi" : v < lo ? "lo" : v - lo <= hi - v ? "lo" : "hi";
+  }, ev => {
+    const v = valueAtPointer(ev);
+    if (!which) { if (v === lo) return; which = v > lo ? "hi" : "lo"; }
+    if (which === "lo") lo = Math.min(v, hi); else hi = Math.max(v, lo);
+    place();
+    previewNamed(ctl, ctl.name, lo);
+    previewNamed(ctl, ctl.name2, hi);
+    sender.soon();
+  }, () => settle(sender.now()));
+  // Arrow keys move a handle the way the arrow points.
+  const keys = end => ev => {
+    const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[ev.key];
+    if (!d) return;
+    ev.preventDefault();
+    const by = (rev ? -d : d) * (typeof step === "number" && step > 0 ? step : span / 100);
+    if (end === "lo") lo = Math.min(snap(lo + by), hi); else hi = Math.max(snap(hi + by), lo);
+    place();
+    sender.now();
+  };
+  thumbLo.addEventListener("keydown", keys("lo"));
+  thumbHi.addEventListener("keydown", keys("hi"));
+  return h("div", { class: "cp-dual" + (up ? " upright" : "") }, track, out);
+}
+
+// ------------------------------------------------------------------ the polygon
+// A corner per value. The handle moves anywhere inside; each corner's value is its amount times
+// how close the handle is: all of it at the corner, shared with the next corner along an edge,
+// shared by all at the middle (Wachspress coordinates: they always add up to 1).
+
+// A regular polygon's corners, from the top, clockwise, in a 1 × 1 square.
+const polyPoints = n => Array.from({ length: n }, (_, i) => {
+  const a = -Math.PI / 2 + i * 2 * Math.PI / n;
+  return [0.5 + 0.42 * Math.cos(a), 0.5 + 0.42 * Math.sin(a)];
+});
+const triArea = (a, b, c) => ((b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1])) / 2;
+const pdist = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+
+function polyWeights(pts, p) {
+  const n = pts.length, w = new Array(n).fill(0);
+  const corner = pts.findIndex(q => pdist(p, q) < 1e-6);
+  if (corner >= 0) { w[corner] = 1; return w; }
+  for (let i = 0; i < n; i++) { // on an edge: shared by its two corners
+    const j = (i + 1) % n;
+    if (Math.abs(triArea(pts[i], pts[j], p)) < 1e-7) {
+      const t = pdist(p, pts[i]) / pdist(pts[i], pts[j]);
+      if (t >= 0 && t <= 1) { w[i] = 1 - t; w[j] = t; return w; }
+    }
+  }
+  for (let i = 0; i < n; i++) {
+    const a = pts[(i + n - 1) % n], b = pts[i], c = pts[(i + 1) % n];
+    w[i] = triArea(a, b, c) / (triArea(p, a, b) * triArea(p, b, c));
+  }
+  const sum = w.reduce((x, y) => x + y, 0);
+  return w.map(x => x / sum);
+}
+
+// The nearest point inside the polygon (it's convex: inside is the same side of every edge).
+function clampToPoly(pts, p) {
+  const n = pts.length, o = Math.sign(triArea(pts[0], pts[1], pts[2]));
+  if (pts.every((q, i) => triArea(q, pts[(i + 1) % n], p) * o >= 0)) return p;
+  let best = [0.5, 0.5], bd = Infinity;
+  for (let i = 0; i < n; i++) {
+    const a = pts[i], b = pts[(i + 1) % n], dx = b[0] - a[0], dy = b[1] - a[1];
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dy) / (dx * dx + dy * dy)));
+    const q = [a[0] + t * dx, a[1] + t * dy], d = pdist(p, q);
+    if (d < bd) { bd = d; best = q; }
+  }
+  return best;
+}
+
+function polygonControl(ctl, specs, label, panel) {
+  const verts = (ctl.vertices || []).slice(0, 8);
+  if (verts.length < 3) return h("p", { class: "muted small" }, "A polygon needs 3 corners or more");
+  const pts = polyPoints(verts.length);
+  let at = clampToPoly(pts, ctl.at ? [ctl.at.x, ctl.at.y] : [0.5, 0.5]);
+  const values = () => polyWeights(pts, at).map((w, i) => Math.round(w * (verts[i].amount ?? 1) * 1000) / 1000);
+  const NS = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(NS, "svg");
+  svg.setAttribute("viewBox", "0 0 100 100");
+  svg.setAttribute("aria-hidden", "true");
+  for (const q of pts) {
+    const spoke = document.createElementNS(NS, "line");
+    Object.entries({ x1: 50, y1: 50, x2: q[0] * 100, y2: q[1] * 100, class: "cp-poly-spoke" }).forEach(([k, v]) => spoke.setAttribute(k, v));
+    svg.append(spoke);
+  }
+  const shape = document.createElementNS(NS, "polygon");
+  shape.setAttribute("points", pts.map(q => `${q[0] * 100},${q[1] * 100}`).join(" "));
+  shape.setAttribute("class", "cp-poly-shape");
+  svg.append(shape);
+  const knob = h("span", { class: "cp-poly-knob" });
+  // Each corner's name and value, just inside it.
+  const labels = verts.map((v, i) => {
+    const el = h("span", { class: "cp-poly-label" });
+    el.style.left = (0.5 + (pts[i][0] - 0.5) * 0.78) * 100 + "%";
+    el.style.top = (0.5 + (pts[i][1] - 0.5) * 0.78) * 100 + "%";
+    return el;
+  });
+  const sq = h("div", { class: "cp-poly-sq", tabindex: 0, role: "group",
+    "aria-label": `${label || "Polygon"}: drag inside, or use the arrow keys` }, svg, ...labels, knob);
+  const box = h("div", { class: "cp-poly" }, sq);
+  fitSquare(box, sq);
+  const place = () => {
+    const vals = values();
+    knob.style.left = at[0] * 100 + "%";
+    knob.style.top = at[1] * 100 + "%";
+    labels.forEach((el, i) => setChildren(el, verts[i].label || verts[i].name, " ", h("b", null, fmtNum(vals[i]))));
+  };
+  place();
+  const sender = throttled(() => { const vals = values(); return Promise.all(verts.map((v, i) => sendNamed(ctl, v.name, vals[i]))); });
+  // Where the handle is, kept with the control (on this device).
+  const keep = () => updatePanel(panel.id, p => { const c = p.controls.find(c => c.id === ctl.id); if (c) c.at = { x: Math.round(at[0] * 1e4) / 1e4, y: Math.round(at[1] * 1e4) / 1e4 }; });
+  dragOn(sq, null, ev => {
+    const r = sq.getBoundingClientRect();
+    if (!r.width || !r.height) return; // not on screen
+    at = clampToPoly(pts, [(ev.clientX - r.left) / r.width, (ev.clientY - r.top) / r.height]);
+    place();
+    const vals = values();
+    verts.forEach((v, i) => previewNamed(ctl, v.name, vals[i]));
+    sender.soon();
+  }, () => { settle(sender.now()); keep(); });
+  sq.addEventListener("keydown", ev => {
+    const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
+    if (!d) return;
+    ev.preventDefault();
+    const by = ev.shiftKey ? 0.1 : 0.02;
+    at = clampToPoly(pts, [at[0] + d[0] * by, at[1] + d[1] * by]);
+    place();
+    sender.now();
+    keep();
+  });
+  return box;
+}
+const fmtNum = v => String(Math.round(v * 1000) / 1000);
+const dropdownOptions = (ctl, spec) => ctl.options?.length ? ctl.options
+  : spec?.choices?.length ? spec.choices.map((label, value) => ({ label, value })) : [{ label: "Off", value: 0 }, { label: "On", value: 1 }];
+
+// ------------------------------------------------------------------ a control, working
+
+function controlLive(ctl, specs, panel) {
+  ctl = forChosen(panel, ctl);
+  const spec = specOfControl(ctl, specs), v = controlValue(ctl, specs);
+  const label = ctl.label || ctl.name || "";
+  // (for whoever is chosen in a Players dropdown: their name after its label)
+  const who = ctl.from && ctl.type !== "icon" && ctl.target && gmChars().find(c => c.id === ctl.target)?.name;
+  const caption = label && h("span", { class: "cp-label" }, label, who && h("span", { class: "cp-who" }, ` · ${who}`));
+  switch (ctl.type) {
+    case "slider": {
+      const min = ctl.min ?? spec?.min ?? 0, max = ctl.max ?? spec?.max ?? 1, step = ctl.step ?? spec?.step ?? "any";
+      const out = h("output", { class: "cp-out" }, fmtNum(v));
+      // Shown here at once while it moves, sent at most every 150 ms (players' icons follow), and
+      // once when let go.
+      let timer = null, last = 0, latest = v;
+      const send = () => { clearTimeout(timer); timer = null; last = Date.now(); return sendControl(ctl, latest); };
+      // Party updates mustn't redraw it mid-drag: held from pressing to letting go (a press that
+      // doesn't move it fires no change).
+      const release = () => { window.removeEventListener("pointerup", release); window.removeEventListener("pointercancel", release); setTimeout(() => holdRender(false)); };
+      const range = h("input", { type: "range", class: "cp-range" + (isUpright(ctl) ? " upright" : "") + (ctl.reverse ? " reverse" : ""),
+        min: Math.min(min, max), max: Math.max(min, max), step, value: v, "aria-label": label || "Value",
+        ...(isUpright(ctl) ? { "aria-orientation": "vertical" } : {}),
+        onpointerdown: () => { holdRender(true); window.addEventListener("pointerup", release); window.addEventListener("pointercancel", release); },
+        oninput: ev => {
+          latest = +ev.target.value;
+          out.textContent = fmtNum(latest);
+          previewNamed(ctl, ctl.name, latest);
+          if (!timer) timer = setTimeout(send, Math.max(0, 150 - (Date.now() - last)));
+        },
+        onchange: ev => { latest = +ev.target.value; settle(send()); } });
+      return [caption, h("div", { class: "cp-slider" + (isUpright(ctl) ? " upright" : "") }, range, out)];
+    }
+    case "range":
+      return [caption, rangeControl(ctl, specs, label)];
+    case "polygon":
+      return [caption, polygonControl(ctl, specs, label, panel)];
+    case "toggle": {
+      const on = ctl.on ?? 1, off = ctl.off ?? 0, isOn = v === on;
+      return h("button", { type: "button", class: "cp-switch" + (isOn ? " on" : "") + (isUpright(ctl) ? " upright" : "") + (ctl.reverse ? " reverse" : ""),
+        role: "switch", "aria-checked": String(isOn),
+        onclick: () => sendControl(ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), h("span", null, label));
+    }
+    case "button":
+      return h("button", { type: "button", class: "btn cp-btn", title: ctl.name ? `${ctl.action === "add" ? `Adds ${ctl.amount ?? 1} to` : `Sets`} ${ctl.name}${ctl.action === "add" ? "" : ` to ${ctl.amount ?? 1}`}` : "",
+        onclick: () => sendControl(ctl, ctl.action === "add" ? Math.round((v + (ctl.amount ?? 1)) * 1000) / 1000 : ctl.amount ?? 1) },
+        controlPicture(ctl, "cp-btn-icon"), label);
+    case "dropdown":
+      if (isPlayersDropdown(ctl)) {
+        const chars = gmChars(), at = chosenPlayer(panel, ctl);
+        return [caption || h("span", { class: "cp-label" }, "Player"), h("select", { class: "cp-select", "aria-label": label || "Player",
+          onchange: ev => { ui.panelPick[`${panel.id}/${ctl.id}`] = ev.target.value; render(); } },
+          chars.length ? chars.map(c => h("option", { value: c.id, selected: c.id === at }, c.name)) : h("option", { value: "" }, "No players yet"))];
+      }
+      return [caption, h("select", { class: "cp-select", "aria-label": label || "Value", onchange: ev => sendControl(ctl, +ev.target.value) },
+        dropdownOptions(ctl, spec).map(o => h("option", { value: o.value, selected: o.value === v }, o.label)))];
+    case "icon":
+      return [controlPicture(ctl, "cp-icon", "question", pictureWhose(panel, ctl)), caption];
+    case "board": {
+      // Its layers' state on this device, and its groups' members splitting off (kept with it).
+      const opts = { key: `${panel.id}/${ctl.id}`, change: fn => updatePanel(panel.id, p => { const c = findItem(p, ctl.id); if (c?.board) fn(c.board); }) };
+      return [caption, gmBoard(ctl.board || { pins: [] }, opts),
+        iconBtn("expand", "Expand: zoom, scroll and layers", () => openBoardZoom(ctl.board || { pins: [] }, ctl.label || "Board", opts), "cp-expand")];
+    }
+    default: // text: words, and the value it shows (if any)
+      return [caption, ctl.name && h("b", { class: "cp-readout" }, showValue(spec, v))];
+  }
+}
+
+// ------------------------------------------------------------------ Tabs controls
+// A Tabs control (type "tabs") is a tree of tabs, `levels` deep (1 to 4): a row of tabs for each
+// level, each row the tabs under the one chosen in the row before. Wider than it's tall, the rows
+// are stacked; taller, they stand side by side.
+//   { type: "tabs", levels, style?, turn?, items: [{ id, label, icon? | iconDoc?, iconSvg?, iconLib?, items?: [tab] }] }
+// style: "horizontal" (rows of tabs), "vertical" (columns), or none (as its shape: rows when wider
+// than tall, else columns). turn: in columns, the labels turned (on the panel's left half reading
+// up, on its right half reading down, the first level outermost). Each level is a sliding
+// switch (slideSwitch), the chosen tab in the control's colour.
+// Any control, another Tabs control too, shows on one tab (`tab`: its id) or always (none). On a
+// tab, it shows while that tab is chosen, and while any tab under it is. Tabs controls that show on
+// a tab nest (a page's own tabs down the side). Controls that can't show together (under different
+// tabs) can use the same cells. The tabs chosen are this device's: ui.panelTabs["panelId/tabsId"].
+
+const MAX_TAB_LEVELS = 4;
+const isTabs = c => c?.type === "tabs";
+const panelItems = panel => panel.controls;
+const overlaps = (a, r) => a.x < r.x + r.w && r.x < a.x + a.w && a.y < r.y + r.h && r.y < a.y + a.h;
+const prefixOf = (a, b) => a.length <= b.length && a.every((x, i) => b[i] === x);
+
+// Every tab: id -> { tab, owner (its Tabs control), path (ids from the top level), depth }.
+function tabIndex(panel) {
+  const out = new Map();
+  for (const t of panel.controls.filter(isTabs)) {
+    const walk = (items, path) => {
+      if (path.length >= (t.levels || 1)) return;
+      for (const it of items || []) { const p = [...path, it.id]; out.set(it.id, { tab: it, owner: t, path: p }); walk(it.items, p); }
+    };
+    walk(t.items, []);
+  }
+  return out;
+}
+// The tabs an item is under, outermost first: [{ owner (id), path }].
+function tabChain(panel, item, index = tabIndex(panel), seen = new Set()) {
+  const at = item?.tab && index.get(item.tab);
+  if (!at || seen.has(at.owner.id)) return [];
+  seen.add(at.owner.id);
+  return [...tabChain(panel, at.owner, index, seen), { owner: at.owner.id, path: at.path }];
+}
+// Can two items be on screen at once? Not if they're under different tabs of one Tabs control.
+function canShowTogether(panel, a, b, index = tabIndex(panel)) {
+  const ca = tabChain(panel, a, index), cb = tabChain(panel, b, index);
+  return ca.every(x => { const y = cb.find(c => c.owner === x.owner); return !y || prefixOf(x.path, y.path) || prefixOf(y.path, x.path); });
+}
+// The tabs chosen in a Tabs control (an id per level), on this device: as chosen, else the first.
+function chosenTabs(panel, t) {
+  const saved = ui.panelTabs[`${panel.id}/${t.id}`] || [], out = [];
+  let items = t.items || [];
+  for (let l = 0; l < (t.levels || 1) && items.length; l++) {
+    const it = items.find(x => x.id === saved[l]) || items[0];
+    out.push(it.id);
+    items = it.items || [];
+  }
+  return out;
+}
+// Is an item showing: are the tabs it's under (and theirs) chosen?
+function showing(panel, item, index = tabIndex(panel)) {
+  return tabChain(panel, item, index).every(x => { const t = panel.controls.find(c => c.id === x.owner); return t && prefixOf(x.path, chosenTabs(panel, t)); });
+}
+// The tab a new control goes on: the innermost tab chosen on screen (none without tabs).
+function tabHere(panel, index = tabIndex(panel)) {
+  const shown = panel.controls.filter(c => isTabs(c) && showing(panel, c, index) && chosenTabs(panel, c).length);
+  const deepest = shown.sort((a, b) => tabChain(panel, b, index).length - tabChain(panel, a, index).length)[0];
+  return deepest ? chosenTabs(panel, deepest).at(-1) : undefined;
+}
+// "Weather › Rain", what's chosen on screen (for the arrange bar).
+function tabsHereWords(panel, index = tabIndex(panel)) {
+  const t = tabHere(panel, index);
+  if (!t) return "";
+  const at = index.get(t);
+  return [...tabChain(panel, at.owner, index).flatMap(x => x.path), ...at.path].map(id => index.get(id)?.tab.label || "?").join(" › ");
+}
+
+// Are a Tabs control's labels turned when it's in columns? (Set, else as its Vertical style first had them.)
+const tabsTurned = t => t.turn ?? t.style === "vertical";
+
+// A Tabs control, working: a sliding switch of tabs per level, the chosen ones on its thumb.
+function tabsLive(panel, t) {
+  const chosen = chosenTabs(panel, t), rows = [];
+  const down = t.style === "vertical" || (t.style !== "horizontal" && t.w < t.h), turned = down && tabsTurned(t);
+  const side = t.x + t.w / 2 <= panel.cols / 2 ? "left" : "right"; // which way turned labels read
+  let items = t.items || [];
+  for (let l = 0; l < (t.levels || 1) && items.length; l++) {
+    const level = l, here = items;
+    rows.push(slideSwitch(`${t.label || "Tabs"}, level ${l + 1}`,
+      here.map((it, i) => [it.id, [controlPicture(it, "cp-tab-icon"), h("span", null, it.label || `Tab ${i + 1}`)], it.label || `Tab ${i + 1}`]),
+      chosen[level], id => { ui.panelTabs[`${panel.id}/${t.id}`] = [...chosen.slice(0, level), id]; render(); },
+      { tabs: true, even: true, cls: ["cp-tabs", down ? "down" : "across", turned && `turned ${side}`].filter(Boolean).join(" ") }));
+    items = here.find(x => x.id === chosen[l])?.items || [];
+  }
+  return h("div", { class: ["cp-tab-levels", down ? "down" : "across", turned && side === "right" && "from-right"].filter(Boolean).join(" ") }, rows);
+}
+
+// ------------------------------------------------------------------ the grid
+
+const placeCell = (el, r) => { el.style.gridColumn = `${r.x + 1} / span ${r.w}`; el.style.gridRow = `${r.y + 1} / span ${r.h}`; };
+// Would `item` at r overlap something it can show with?
+const clashes = (panel, item, r) => { const index = tabIndex(panel); return panelItems(panel).some(o => o.id !== item.id && canShowTogether(panel, o, item, index) && overlaps(o, r)); };
+const fitsPanel = (panel, r) => r.x >= 0 && r.y >= 0 && r.x + r.w <= panel.cols && r.y + r.h <= panel.rows;
+
+// Change one of this campaign's panels (found again by id: the data may have been replaced).
+function updatePanel(panelId, fn, msg) {
+  commit(s => { const p = (s.gmControls || []).find(c => c.id === panelId); if (p) fn(p); }, msg);
+}
+const findItem = (p, id) => panelItems(p).find(c => c.id === id);
+
+function panelGrid(panel, editing) {
+  const specs = knownValues(), index = tabIndex(panel);
+  const grid = h("div", { class: "cp-grid" + (editing ? " editing" : "") });
+  grid.style.setProperty("--cols", panel.cols);
+  grid.style.setProperty("--rows", panel.rows);
+  if (editing) {
+    // What's being arranged: the tabs chosen on screen.
+    const tab = tabHere(panel, index), here = { id: null, tab };
+    for (let y = 0; y < panel.rows; y++) for (let x = 0; x < panel.cols; x++) {
+      if (clashes(panel, here, { x, y, w: 1, h: 1 })) continue;
+      const cell = h("button", { type: "button", class: "cp-empty", title: "Add a control here", "aria-label": `Add a control at column ${x + 1}, row ${y + 1}`,
+        onclick: () => editPanelControl(panel, null, { x, y, tab }) }, icon("plus"));
+      placeCell(cell, { x, y, w: 1, h: 1 });
+      grid.append(cell);
+    }
+  }
+  for (const item of panelItems(panel)) if (showing(panel, item, index)) grid.append(controlCell(panel, item, specs, editing, grid));
+  return h("div", { class: "cp-wrap" }, grid);
+}
+
+function controlCell(panel, ctl, specs, editing, grid) {
+  const tabs = isTabs(ctl);
+  const el = h("div", { class: `cp-cell cp-type-${ctl.type}` + (ctl.color ? " coloured" : "") });
+  placeCell(el, ctl);
+  if (ctl.color) el.style.setProperty("--cp", ctl.color);
+  const live = () => tabs ? tabsLive(panel, ctl) : controlLive(ctl, specs, panel);
+  if (!editing) { el.append(...[live()].flat().filter(Boolean)); return el; }
+
+  // Arranging: drag it to move, drag its corner to resize (or arrow keys; Shift+arrows resize).
+  // A Tabs control's tabs still work, to arrange each tab in turn.
+  const body = tabs ? live() : h("div", { class: "cp-inert", inert: true }, live());
+  let draft = { x: ctl.x, y: ctl.y, w: ctl.w, h: ctl.h }, mode = null, start = null;
+  const cellAt = ev => {
+    const r = grid.getBoundingClientRect();
+    return { x: Math.floor((ev.clientX - r.left) / (r.width / panel.cols)), y: Math.floor((ev.clientY - r.top) / (r.height / panel.rows)) };
+  };
+  const bad = r => clashes(panel, ctl, r) || !fitsPanel(panel, r);
+  const show = () => { placeCell(el, draft); el.classList.toggle("clash", bad(draft)); };
+  const finish = () => {
+    const ok = !bad(draft);
+    const moved = ["x", "y", "w", "h"].some(k => draft[k] !== ctl[k]);
+    if (!ok) { draft = { x: ctl.x, y: ctl.y, w: ctl.w, h: ctl.h }; show(); }
+    holdRender(false);
+    if (ok && moved) updatePanel(panel.id, p => { const c = findItem(p, ctl.id); if (c) Object.assign(c, draft); });
+  };
+  const name = ctl.label || CONTROL_TYPES.find(t => t[0] === ctl.type)[1];
+  const handle = h("button", { type: "button", class: "cp-handle" + (tabs ? " cp-handle-corner" : ""), "aria-label": `${name}: drag to move, or arrow keys (Shift to resize)`,
+    title: tabs ? "Drag to move the tabs" : "",
+    onkeydown: ev => {
+      const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
+      if (!d) return;
+      ev.preventDefault();
+      draft = ev.shiftKey ? { ...draft, w: Math.max(1, draft.w + d[0]), h: Math.max(1, draft.h + d[1]) } : { ...draft, x: draft.x + d[0], y: draft.y + d[1] };
+      if (bad(draft)) { draft = { x: ctl.x, y: ctl.y, w: ctl.w, h: ctl.h }; return; }
+      finish();
+    } }, tabs && icon("move"));
+  const grip = h("span", { class: "cp-grip", "aria-hidden": "true" });
+  const down = (ev, m) => {
+    ev.preventDefault();
+    ev.stopPropagation();
+    mode = m;
+    start = cellAt(ev);
+    try { ev.target.setPointerCapture(ev.pointerId); } catch {}
+    holdRender(true);
+    el.classList.add("dragging");
+  };
+  const move = ev => {
+    if (!mode) return;
+    const c = cellAt(ev), dx = c.x - start.x, dy = c.y - start.y;
+    draft = mode === "move" ? { ...draft, x: Math.max(0, Math.min(panel.cols - ctl.w, ctl.x + dx)), y: Math.max(0, Math.min(panel.rows - ctl.h, ctl.y + dy)) }
+      : { ...draft, w: Math.max(1, Math.min(panel.cols - ctl.x, ctl.w + dx)), h: Math.max(1, Math.min(panel.rows - ctl.y, ctl.h + dy)) };
+    show();
+  };
+  const up = () => { if (!mode) return; mode = null; el.classList.remove("dragging"); finish(); };
+  handle.addEventListener("pointerdown", ev => down(ev, "move"));
+  grip.addEventListener("pointerdown", ev => down(ev, "size"));
+  for (const t of [handle, grip]) {
+    t.addEventListener("pointermove", move);
+    t.addEventListener("pointerup", up);
+    t.addEventListener("pointercancel", up);
+  }
+  el.classList.add("arranging");
+  el.classList.toggle("clash", bad(ctl)); // e.g. moved here when a tab was removed
+  el.append(body, handle, grip,
+    iconBtn("edit", tabs ? "Edit these tabs" : "Edit this control", () => editPanelControl(panel, ctl), "cp-edit"));
+  return el;
+}
+
+// ------------------------------------------------------------------ a panel's card
+
+function controlPanelCard(panel) {
+  const key = "gmc:" + panel.id, closed = ui.collapsed.has(key), editing = ui.panelEdit === panel.id;
+  const toggle = () => { closed ? ui.collapsed.delete(key) : ui.collapsed.add(key); render(); };
+  const where = tabsHereWords(panel);
+  return h("div", { class: "group gm-control-card cp-card" },
+    h("div", { class: "group-head" },
+      h("button", { class: "collapse" + (closed ? " closed" : ""), "aria-expanded": String(!closed), onclick: toggle }, icon("chevron"), h("h3", null, panel.name)),
+      h("span", { class: "muted small" }, plural(panel.controls.length, "control")),
+      !closed && (editing || canEditNow()) && h("button", { class: "btn" + (editing ? " primary" : ""), onclick: () => { ui.panelEdit = editing ? null : panel.id; render(); } },
+        icon(editing ? "check" : "grid"), editing ? "Done" : "Arrange"),
+      canEditNow() && iconBtn("edit", `Edit ${panel.name}`, () => editControlPanel(panel)),
+      iconBtn("trash", `Delete ${panel.name}`, () => confirmDialog(`Delete the panel “${panel.name}”? The values it set keep their values.`, "Delete",
+        () => commit(s => { s.gmControls = s.gmControls.filter(c => c.id !== panel.id); }, `Deleted ${panel.name}`, true)), "danger-hover")),
+    !closed && [
+      editing && h("div", { class: "cp-arrange-bar" },
+        h("p", { class: "muted small" }, "Click + to add a control (Tabs splits the panel into tabs). Drag a control to move it, or its corner to resize it; or select it and use the arrow keys (Shift to resize). The pencil edits it.",
+          where && [" Arranging ", h("b", null, where), ": choose another tab to arrange it."])),
+      !panelItems(panel).length && !editing ? h("p", { class: "muted pad" }, "No controls yet: Arrange to add some.") : panelGrid(panel, editing),
+    ]);
+}
+
+// ------------------------------------------------------------------ making and editing
+
+function editControlPanel(panel) {
+  const isNew = !panel;
+  const draft = panel ? { name: panel.name, cols: panel.cols, rows: panel.rows } : { name: "", cols: 6, rows: 4 };
+  let close;
+  const num = (key, label, min, max) => h("label", { class: "field" }, h("span", null, label),
+    h("input", { type: "number", min, max, step: 1, value: draft[key], onchange: e => { draft[key] = Math.max(min, Math.min(max, Math.round(+e.target.value || min))); e.target.value = draft[key]; } }));
+  const save = () => {
+    const name = draft.name.trim() || "Panel";
+    if (panel && panelItems(panel).some(c => !fitsPanel(draft, c))) return toast("Some controls or tabs would be outside the grid: move or remove them first");
+    close();
+    if (isNew) {
+      const p = { id: "gc" + uid(), kind: "panel", name, cols: draft.cols, rows: draft.rows, controls: [] };
+      ui.panelEdit = p.id;
+      commit(s => { s.gmControls = [...(s.gmControls || []), p]; }, `Made ${name}`);
+    } else updatePanel(panel.id, p => Object.assign(p, { name, cols: draft.cols, rows: draft.rows }), `Saved ${name}`);
+  };
+  close = openModal(isNew ? "New panel" : `Edit ${panel.name}`, h("div", { class: "form" },
+    h("label", { class: "field" }, h("span", null, "Name"),
+      h("input", { type: "text", value: draft.name, maxlength: 60, placeholder: "e.g. Ship's helm, Weather, Doom clock", oninput: e => { draft.name = e.target.value; } })),
+    h("div", { class: "form grid" }, num("cols", "Columns", 1, 12), num("rows", "Rows", 1, 24)),
+    h("p", { class: "muted small" }, "A grid for your controls: sliders, range sliders, switches, buttons, dropdowns, polygons, boards, pictures and text. Each sets a Global value or a player's or item's Local value.")),
+  { footer: [h("button", { class: "btn", onclick: () => close() }, "Cancel"), h("button", { class: "btn primary", onclick: save }, icon("check"), isNew ? "Make it" : "Save")] });
+}
+
+// A dropdown's choices: a label and a value per row, with + and − for more or fewer. Either can
+// be left empty: the value is then the label (when it's a number), else the choice's place
+// (0, 1, 2…: values are numbers); the label is then the value. The placeholders show what an
+// empty one becomes.
+const choiceValue = (r, i) => r.value.trim() !== "" ? +r.value : r.label.trim() !== "" && Number.isFinite(+r.label) ? +r.label : i;
+function choicesEditor(rows) {
+  const box = h("div", { class: "cp-choices" });
+  const draw = () => setChildren(box,
+    h("span", { class: "muted small" }, "Label"), h("span", { class: "muted small" }, "Value"),
+    rows.map((r, i) => {
+      const val = h("input", { type: "number", step: "any", value: r.value, "aria-label": `Value ${i + 1}`, placeholder: String(choiceValue({ ...r, value: "" }, i)),
+        oninput: e => { r.value = e.target.value; lab.placeholder = r.value || `Choice ${i + 1}`; } });
+      const lab = h("input", { type: "text", maxlength: 40, value: r.label, "aria-label": `Label ${i + 1}`, placeholder: r.value || `Choice ${i + 1}`,
+        oninput: e => { r.label = e.target.value; val.placeholder = String(choiceValue({ ...r, value: "" }, i)); } });
+      return [lab, val];
+    }),
+    h("div", { class: "cp-choices-buttons" },
+      iconBtn("minus", "One choice fewer", () => { if (rows.length > 1) { rows.pop(); draw(); } }),
+      iconBtn("plus", "One choice more", () => { if (rows.length < 30) { rows.push({ label: "", value: "" }); draw(); } }),
+      h("span", { class: "muted small" }, "Leave them all empty to use the value's own choices.")));
+  draw();
+  return h("div", { class: "field" }, h("span", null, "Choices"), box);
+}
+function choicesFromRows(rows) {
+  const used = rows.map((r, i) => [r, i]).filter(([r]) => r.label.trim() !== "" || r.value.trim() !== "");
+  if (used.some(([r]) => r.value.trim() !== "" && !Number.isFinite(+r.value))) return { error: "Choice values are numbers" };
+  return { list: used.map(([r, i]) => { const value = choiceValue(r, i); return { label: (r.label.trim() || String(value)).slice(0, 40), value }; }) };
+}
+
+// After tabs are removed (or a Tabs control): controls on a tab that's gone go to the nearest tab
+// above it that's still there, else to where its Tabs control showed (or every tab).
+function rehomeControls(panel, before) {
+  const now = tabIndex(panel);
+  for (const c of panel.controls) {
+    if (!c.tab || now.has(c.tab)) continue;
+    const was = before.get(c.tab);
+    const up = was && [...was.path].reverse().find(id => now.has(id));
+    if (up) c.tab = up;
+    else if (was?.owner.tab && now.has(was.owner.tab)) c.tab = was.owner.tab;
+    else delete c.tab;
+  }
+}
+
+// Add (at: the empty cell clicked) or edit one control.
+function editPanelControl(panel, ctl, at) {
+  const isNew = !ctl;
+  const draft = ctl ? clone(ctl) : { id: "c" + uid(), type: "slider", x: at.x, y: at.y, w: 1, h: 1, scope: "party", target: "", name: "",
+    ...(at.tab ? { tab: at.tab } : {}) };
+  // The dropdown's choices as typed: [{ label, value }] of strings (see choicesFromRows).
+  const rows = (draft.options?.length ? draft.options : [{ label: "", value: "" }, { label: "", value: "" }])
+    .map(o => ({ label: String(o.label ?? ""), value: String(o.value ?? "") }));
+  const specs = knownValues();
+  const listId = "cp-names-" + uid();
+  let close;
+  const fields = h("div", { class: "form" });
+  const text = (key, label, placeholder = "") => h("label", { class: "field" }, h("span", null, label),
+    h("input", { type: "text", value: draft[key] || "", placeholder, maxlength: 60, oninput: e => { draft[key] = e.target.value; } }));
+  const num = (key, label, placeholder) => h("label", { class: "field" }, h("span", null, label),
+    h("input", { type: "number", step: "any", value: draft[key] ?? "", placeholder: placeholder ?? "", onchange: e => { draft[key] = e.target.value === "" ? undefined : +e.target.value; } }));
+  // A picture: one of your drawings (or a new one, drawn here), or a built-in icon.
+  const iconPick = () => {
+    const box = h("div", { class: "inline wrap" });
+    const name = () => draft.label || (draft.type === "icon" ? "Picture" : "Button");
+    const drawBox = () => {
+      const has = draft.iconSvg || draft.icon;
+      setChildren(box, has ? controlPicture(draft, "cp-pick-icon") : h("span", { class: "muted small" }, "None"),
+        h("button", { type: "button", class: "btn", onclick: () => openIconPicker(draft.icon, id => {
+          if (id) draft.icon = id; else delete draft.icon;
+          setItemDrawing(draft, null); // an icon replaces a drawing
+          drawBox();
+        }, null, { drawings: drawingLibrary(), onDrawing: d => { setItemDrawing(draft, d); drawBox(); } }) }, icon("image"), "Choose…"),
+        h("button", { type: "button", class: "btn", onclick: () => {
+          if (draft.iconDoc) return editItemDrawing(draft, drawBox, { name: name(), self: ctl });
+          openIconDrawer({ name: name(), color: draft.color, templates: true }, (doc, svg) => {
+            if (doc) setItemDrawing(draft, addDrawing(name(), doc, svg));
+            drawBox();
+          });
+        } }, icon("edit"), draft.iconDoc ? "Edit drawing…" : "Draw…"),
+        has && h("button", { type: "button", class: "btn", onclick: () => { delete draft.icon; setItemDrawing(draft, null); drawBox(); } }, "None"),
+        draft.type === "icon" && h("small", { class: "muted", style: "flex-basis: 100%" },
+          "A drawing that reads Global values (global_…) moves with them: a weather vane, a tide gauge, a clock."));
+    };
+    drawBox();
+    return h("div", { class: "field" }, h("span", null, draft.type === "icon" ? "Picture" : "Icon"), box);
+  };
+  const nameInput = (obj, key, aria, placeholder = "value name, e.g. storm") => h("input", { type: "text", list: listId, value: obj[key] || "", placeholder,
+    spellcheck: "false", autocomplete: "off", "aria-label": aria, onchange: e => { obj[key] = e.target.value.trim(); } });
+  const nameField = (key, label) => h("label", { class: "field" }, h("span", null, label), nameInput(draft, key, label));
+  const playerDropdowns = () => panel.controls.filter(c => isPlayersDropdown(c) && c.id !== draft.id);
+  // Who it sets values for: everyone (Globals), a player, an item, or whoever is chosen in a
+  // Players dropdown on this panel.
+  const forField = () => {
+    const dds = playerDropdowns(), cur = draft.from ? "from:" + draft.from : `${draft.scope}:${draft.target}`;
+    const sel = h("select", { onchange: e => {
+      const v = e.target.value;
+      if (v.startsWith("from:")) { draft.from = v.slice(5); draft.scope = "character"; draft.target = ""; }
+      else { delete draft.from; const [scope, target] = v.split(/:(.*)/); draft.scope = scope; draft.target = target || ""; }
+    } }, pinScopeOptions(draft.from ? "party:" : cur),
+      dds.length > 0 && h("optgroup", { label: "Chosen in a Players dropdown" },
+        dds.map(d => h("option", { value: "from:" + d.id }, `Whoever is chosen in ${d.label || "the Players dropdown"}`))));
+    setTimeout(() => { sel.value = cur; });
+    return [h("label", { class: "field" }, h("span", null, "For"), sel),
+      h("datalist", { id: listId }, [...new Set([...specs.values()].map(v => v.name))].sort().map(n => h("option", { value: n })))];
+  };
+  const valueFields = () => [nameField("name", draft.type === "text" ? "Shows the value (optional)" : "Sets the value"), forField()];
+  const players = () => isPlayersDropdown(draft);
+  // A dropdown lists the value's choices (and sets it), or the party's players (whose values other controls use).
+  const listsField = () => h("div", { class: "field" }, h("span", null, "Lists"),
+    slideSwitch("Lists", [["values", "Choices: sets a value"], ["players", "Players: choose whose"]], players() ? "players" : "values",
+      v => { if (v === "players") draft.choose = "players"; else delete draft.choose; drawFields(); }, { even: true, cls: "seg-field" }),
+    players() && h("small", { class: "muted" }, "The party's characters. Other controls can follow whoever is chosen here: a picture shows their Local values (its Local values of), a slider or switch sets them (its For)."));
+  // Whose Local values a picture shows: none (Global values only), a character's, an item's, or
+  // whoever is chosen in a Players dropdown on this panel.
+  const whoseField = () => {
+    const dds = playerDropdowns();
+    const cur = draft.from ? "from:" + draft.from : `${draft.scope || "party"}:${draft.target || ""}`;
+    const sel = h("select", { onchange: e => {
+      const v = e.target.value;
+      if (v.startsWith("from:")) { draft.from = v.slice(5); draft.scope = "party"; draft.target = ""; }
+      else { delete draft.from; const [scope, target] = v.split(/:(.*)/); draft.scope = scope; draft.target = target || ""; }
+    } }, pinScopeOptions(draft.from ? "party:" : cur),
+      dds.length > 0 && h("optgroup", { label: "Chosen in a Players dropdown" },
+        dds.map(d => h("option", { value: "from:" + d.id }, `Whoever is chosen in ${d.label || "the Players dropdown"}`))));
+    setTimeout(() => { sel.value = cur; });
+    return h("label", { class: "field" }, h("span", null, "Local values of"), sel,
+      h("small", { class: "muted" }, "Its drawing reads their Local values (local_…) as well as the Global ones."
+        + (dds.length ? "" : " To switch between players, add a dropdown that lists Players, then choose it here.")));
+  };
+  // A polygon's corners: a row each (label, the value it sets, its amount at the corner), 3 to 8.
+  const cornersEditor = () => {
+    const box = h("div", { class: "cp-corners" });
+    const draw = () => setChildren(box,
+      h("span", { class: "muted small" }, "Label"), h("span", { class: "muted small" }, "Sets the value"), h("span", { class: "muted small" }, "At the corner"),
+      draft.vertices.map((v, i) => [
+        h("input", { type: "text", maxlength: 30, value: v.label || "", placeholder: `Corner ${i + 1}`, "aria-label": `Corner ${i + 1}: label`, oninput: e => { v.label = e.target.value; } }),
+        nameInput(v, "name", `Corner ${i + 1}: value`, "value name"),
+        h("input", { type: "number", step: "any", value: v.amount ?? "", placeholder: "1", "aria-label": `Corner ${i + 1}: amount`,
+          onchange: e => { v.amount = e.target.value === "" ? undefined : +e.target.value; } })]),
+      h("div", { class: "cp-choices-buttons" },
+        iconBtn("minus", "One corner fewer", () => { if (draft.vertices.length > 3) { draft.vertices.pop(); draw(); } }),
+        iconBtn("plus", "One corner more", () => { if (draft.vertices.length < 8) { draft.vertices.push({ label: "", name: "" }); draw(); } }),
+        h("span", { class: "muted small" }, "3 to 8 corners. Each value is its amount × how close the handle is to its corner.")));
+    draw();
+    return h("div", { class: "field" }, h("span", null, "Corners"), box);
+  };
+  // Which tab it shows on (when the panel has Tabs controls): any tab of any of them, or always.
+  // Not one of its own tabs, nor a tab of a Tabs control shown on its own (a Tabs control can't be
+  // inside itself).
+  const index = tabIndex(panel);
+  const whereFields = () => {
+    const inside = id => { for (let at = index.get(id); at; at = at.owner.tab && index.get(at.owner.tab)) if (at.owner.id === draft.id) return true; return false; };
+    const tabs = [...index.entries()].filter(([id]) => !inside(id));
+    if (!tabs.length) return null;
+    const many = new Set(tabs.map(([, at]) => at.owner.id)).size > 1;
+    return h("label", { class: "field" }, h("span", null, "Shows on"),
+      h("select", { onchange: e => { if (e.target.value) draft.tab = e.target.value; else delete draft.tab; } },
+        h("option", { value: "", selected: !draft.tab }, "Always (every tab)"),
+        tabs.map(([id, at]) => h("option", { value: id, selected: draft.tab === id },
+          (many ? `${at.owner.label || "Tabs"}: ` : "") + "\u2003".repeat(at.path.length - 1) + (at.tab.label || "Unnamed tab")))),
+      h("small", { class: "muted" }, "On a tab, it shows while that tab is chosen, and any tab under it."));
+  };
+  // A Tabs control's tabs: a tree, levels deep (rename, icon, reorder, add under, remove).
+  const tabsEditor = () => {
+    draft.levels = Math.max(1, Math.min(MAX_TAB_LEVELS, draft.levels || 1));
+    draft.items ||= [{ id: "tb" + uid(), label: "Tab 1" }, { id: "tb" + uid(), label: "Tab 2" }];
+    const box = h("div", { class: "cp-tab-tree" });
+    const node = (list, it, i, depth) => h("div", { class: "cp-tab-node" },
+      h("div", { class: "cp-tab-row", style: { paddingLeft: depth * 22 + "px" } },
+        h("button", { type: "button", class: "btn cp-tab-pick", title: "Choose its picture: one of your drawings or an icon (optional)",
+          onclick: () => openIconPicker(it.icon, id => { if (id) it.icon = id; else delete it.icon; setItemDrawing(it, null); draw(); }, null,
+            { drawings: drawingLibrary(), onDrawing: d => { setItemDrawing(it, d); delete it.icon; draw(); } }) },
+          controlPicture(it, "cp-tab-icon") || icon("image")),
+        h("input", { type: "text", value: it.label || "", maxlength: 30, placeholder: `Tab ${i + 1}`, "aria-label": `Level ${depth + 1}, tab ${i + 1}: name`,
+          oninput: e => { it.label = e.target.value; } }),
+        iconBtn("up", "Earlier", () => { if (i > 0) { [list[i - 1], list[i]] = [list[i], list[i - 1]]; draw(); } }),
+        iconBtn("down", "Later", () => { if (i < list.length - 1) { [list[i + 1], list[i]] = [list[i], list[i + 1]]; draw(); } }),
+        depth + 1 < draft.levels && iconBtn("plus", `Add a tab under ${it.label || "this one"}`, () => { (it.items ||= []).push({ id: "tb" + uid(), label: `Tab ${it.items.length + 1}` }); draw(); }),
+        iconBtn("trash", "Remove this tab (and the tabs under it)", () => { list.splice(i, 1); draw(); }, "danger-hover")),
+      depth + 1 < draft.levels && (it.items || []).map((k, j) => node(it.items, k, j, depth + 1)));
+    const draw = () => setChildren(box, draft.items.map((it, i) => node(draft.items, it, i, 0)),
+      h("button", { type: "button", class: "btn", onclick: () => { draft.items.push({ id: "tb" + uid(), label: `Tab ${draft.items.length + 1}` }); draw(); } },
+        icon("plus"), "Add a tab"));
+    draw();
+    return [
+      h("label", { class: "field" }, h("span", null, "Style"),
+        h("select", { onchange: e => { if (e.target.value) draft.style = e.target.value; else delete draft.style; drawFields(); } },
+          h("option", { value: "", selected: !draft.style }, "As its shape: rows if it's wide, columns if it's tall"),
+          h("option", { value: "horizontal", selected: draft.style === "horizontal" }, "Horizontal: rows of tabs"),
+          h("option", { value: "vertical", selected: draft.style === "vertical" }, "Vertical: columns of tabs"))),
+      draft.style !== "horizontal" && h("label", { class: "check field" },
+        h("input", { type: "checkbox", checked: tabsTurned(draft), onchange: e => { draft.turn = e.target.checked; } }),
+        " Turn the labels in columns: reading upwards on the panel's left side, downwards on its right"),
+      h("label", { class: "field" }, h("span", null, "Levels"),
+        h("select", { onchange: e => { draft.levels = +e.target.value; drawFields(); } },
+          Array.from({ length: MAX_TAB_LEVELS }, (_, i) => i + 1).map(n => h("option", { value: n, selected: draft.levels === n }, n === 1 ? "1: one row of tabs" : `${n}: tabs under tabs, ${n} rows`))),
+        h("small", { class: "muted" }, "Each level is a row of tabs: the tabs under the one chosen in the row before. Controls show on a tab at any level.")),
+      h("div", { class: "field" }, h("span", null, "Tabs"), box,
+        h("small", { class: "muted" }, "Removing a tab moves its controls to the tab above it (or to every tab).")),
+    ];
+  };
+  const drawFields = () => setChildren(fields,
+    h("label", { class: "field" }, h("span", null, "Kind"), h("select", { onchange: e => { draft.type = e.target.value; drawFields(); } },
+      CONTROL_GROUPS.map(([group, kinds]) => h("optgroup", { label: group }, kinds.map(k => h("option", { value: k, selected: (draft.type === "range" ? "slider" : draft.type) === k },
+        CONTROL_KINDS.find(t => t[0] === k)[1])))))),
+    (draft.type === "slider" || draft.type === "range") && h("div", { class: "field" }, h("span", null, "Handles"),
+      slideSwitch("Handles", [["slider", "One: a value"], ["range", "Two: a lower and an upper value"]], draft.type, v => { draft.type = v; drawFields(); }, { even: true, cls: "seg-field" })),
+    text("label", draft.type === "text" ? "Text" : "Label", draft.type === "icon" ? "Optional" : ""),
+    draft.type === "dropdown" && listsField(),
+    ((SETS_VALUE.has(draft.type) && !players()) || draft.type === "text") && valueFields(),
+    draft.type === "range" && [nameField("name", "Sets the lower value"), nameField("name2", "Sets the upper value"), forField()],
+    draft.type === "polygon" && [(draft.vertices = draft.vertices?.length >= 3 ? draft.vertices : [{ label: "", name: "" }, { label: "", name: "" }, { label: "", name: "" }], cornersEditor()), forField()],
+    (draft.type === "slider" || draft.type === "range") && h("div", { class: "form grid" }, num("min", "From", "the value's own"), num("max", "To", "the value's own"), num("step", "Step", "any")),
+    draft.type === "toggle" && h("div", { class: "form grid" }, num("off", "Off sets", "0"), num("on", "On sets", "1")),
+    (draft.type === "slider" || draft.type === "range" || draft.type === "toggle") && h("label", { class: "field" },
+      h("span", null, draft.type === "toggle" ? "On is towards" : "More is towards"),
+      h("select", { onchange: e => { draft.reverse = e.target.value === "1"; } },
+        h("option", { value: "", selected: !draft.reverse }, "The right, or the top when upright"),
+        h("option", { value: "1", selected: !!draft.reverse }, "The left, or the bottom when upright")),
+      h("small", { class: "muted" }, "Make it taller than it's wide (in Arrange, drag its corner) and it stands upright.")),
+    draft.type === "button" && [
+      h("label", { class: "field" }, h("span", null, "When pressed"), h("select", { onchange: e => { draft.action = e.target.value; } },
+        h("option", { value: "set", selected: draft.action !== "add" }, "Set the value to"), h("option", { value: "add", selected: draft.action === "add" }, "Add to the value (negative takes away)"))),
+      num("amount", "Amount", "1")],
+    draft.type === "dropdown" && !players() && choicesEditor(rows),
+    draft.type === "board" && h("div", { class: "field" }, h("span", null, "Picture and pins"),
+      h("div", { class: "inline wrap" },
+        h("span", { class: "muted small" }, `${draft.board?.image ? "A picture" : "A blank square"}, ${plural(draft.board?.pins?.length || 0, "pin")}`),
+        h("button", { type: "button", class: "btn", onclick: () => editBoard(draft.board || { pins: [] }, b => { draft.board = b; drawFields(); }, draft.label || "") },
+          icon("edit"), "Edit board…"))),
+    (draft.type === "icon" || draft.type === "button") && iconPick(),
+    draft.type === "icon" && whoseField(),
+    draft.type === "tabs" && tabsEditor(),
+    whereFields(),
+    h("label", { class: "field" }, h("span", null, "Colour (its edge, background and highlights)"), h("div", { class: "inline" },
+      h("input", { type: "color", value: draft.color || "#888888", onchange: e => { draft.color = e.target.value; } }),
+      draft.color && h("button", { type: "button", class: "btn", onclick: () => { delete draft.color; drawFields(); } }, "Default"))));
+  drawFields();
+
+  const save = () => {
+    if (draft.type !== "dropdown") delete draft.choose;
+    if (players()) { delete draft.options; delete draft.name; draft.scope = "party"; draft.target = ""; }
+    else if (draft.type === "dropdown") {
+      const opts = choicesFromRows(rows);
+      if (opts.error) return toast(opts.error);
+      draft.options = opts.list;
+    }
+    if (draft.type === "board") draft.board = draft.board || { pins: [] };
+    else delete draft.board;
+    if (SETS_VALUE.has(draft.type) && !players() && !isValueName(draft.name)) return toast("Choose the value it sets: a letter, then letters, digits or _");
+    if (draft.type === "text" && draft.name && !isValueName(draft.name)) return toast("Not a value name");
+    if (draft.type === "range" && (!isValueName(draft.name) || !isValueName(draft.name2))) return toast("Choose the two values it sets: a letter, then letters, digits or _");
+    if (draft.type === "range" && draft.name === draft.name2) return toast("The lower and upper values need different names");
+    if (draft.type === "polygon") {
+      if (draft.vertices.some(v => !isValueName(v.name))) return toast("Each corner needs a value to set: a letter, then letters, digits or _");
+      if (new Set(draft.vertices.map(v => v.name)).size < draft.vertices.length) return toast("Each corner needs a value of its own");
+    }
+    if (!SETS_VALUE.has(draft.type) && draft.type !== "text" && draft.type !== "range") delete draft.name;
+    if (draft.type !== "range") delete draft.name2;
+    if (draft.type !== "polygon") { delete draft.vertices; delete draft.at; }
+    if (draft.type === "tabs" || draft.type === "board" || players()) delete draft.from;
+    if (draft.type !== "icon" && draft.type !== "button") { delete draft.icon; setItemDrawing(draft, null); }
+    if (draft.type === "tabs") {
+      // Tabs as saved: named, at most `levels` deep.
+      const tidy = (items, depth) => (items || []).map(it => ({ id: it.id, label: (it.label || "").trim().slice(0, 30), ...(it.icon ? { icon: it.icon } : {}),
+        ...(it.iconSvg && it.iconDoc ? { iconDoc: it.iconDoc, iconSvg: it.iconSvg, ...(it.iconLib ? { iconLib: it.iconLib } : {}) } : {}),
+        ...(depth + 1 < draft.levels && it.items?.length ? { items: tidy(it.items, depth + 1) } : {}) }));
+      draft.items = tidy(draft.items, 0);
+      if (!draft.items.length) return toast("Tabs need at least one tab");
+      if (draft.style === "horizontal") delete draft.turn;
+    } else { delete draft.levels; delete draft.items; delete draft.style; delete draft.turn; }
+    if (isNew) {
+      // As wide as suits it (a slider likes two cells), where there's room.
+      const big = draft.type === "board" || draft.type === "polygon";
+      const want = big ? 3 : draft.type === "tabs" ? Math.min(panel.cols, 4) : draft.type === "slider" || draft.type === "range" ? 2 : 1;
+      const tall = big ? 3 : draft.type === "tabs" ? draft.levels : 1;
+      const room = (w, ht) => fitsPanel(panel, { ...draft, w, h: ht }) && !clashes(panel, draft, { ...draft, w, h: ht });
+      outer: for (let ht = tall; ht >= 1; ht--) for (let w = want; w >= 1; w--) if (room(w, ht)) { draft.w = w; draft.h = ht; break outer; }
+    }
+    if (clashes(panel, draft, draft)) return toast("It would overlap another control where it shows: choose another tab, or move it first");
+    close();
+    updatePanel(panel.id, p => {
+      const before = tabIndex(p);
+      const i = p.controls.findIndex(c => c.id === draft.id);
+      if (i >= 0) p.controls[i] = draft; else p.controls.push(draft);
+      if (isTabs(draft) || isTabs(ctl)) rehomeControls(p, before);
+    });
+  };
+  const remove = () => {
+    close();
+    updatePanel(panel.id, p => {
+      const before = tabIndex(p);
+      p.controls = p.controls.filter(c => c.id !== draft.id);
+      if (isTabs(ctl)) rehomeControls(p, before);
+    }, "Removed the control");
+  };
+  close = openModal(isNew ? "New control" : "Edit control", fields, { footer: [
+    !isNew && h("button", { class: "btn danger", onclick: remove }, icon("trash"), "Remove"),
+    h("button", { class: "btn", onclick: () => close() }, "Cancel"),
+    h("button", { class: "btn primary", onclick: save }, icon("check"), "Save"),
+  ] });
+}

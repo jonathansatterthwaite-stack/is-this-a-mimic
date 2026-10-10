@@ -1,0 +1,10 @@
+marked.min.js — marked v12.0.2, a Markdown parser
+https://github.com/markedjs/marked
+Copyright (c) 2018+, MarkedJS (https://github.com/markedjs/)
+Copyright (c) 2011-2018, Christopher Jeffrey (https://github.com/chjj/)
+MIT License
+
+purify.min.js — DOMPurify 3.2.6, an HTML sanitizer
+https://github.com/cure53/DOMPurify
+Copyright 2025 Dr.-Ing. Mario Heiderich, Cure53
+Dual licensed under the Apache License 2.0 and the Mozilla Public License 2.0

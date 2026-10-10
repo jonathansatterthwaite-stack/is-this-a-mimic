@@ -1,0 +1,12 @@
+# Built apps (published as GitHub release assets instead)
+dist/
+# Private: the APK signing key and its password
+android/keystore/
+# Local data and caches
+party-data/
+my-data/
+__pycache__/
+tools/.cache/
+tools/.build/
+android/.build/
+.claude/

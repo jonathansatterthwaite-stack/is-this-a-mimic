@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Is This A Mimic?</string>
+    <string name="channel_hosting">Party hosting</string>
+    <string name="channel_hosting_desc">Shown while this phone is hosting a party</string>
+    <string name="hosting_title">Hosting a party</string>
+    <string name="hosting_join_at">Players join at %1$s</string>
+    <string name="hosting_no_address">Not connected to Wi-Fi — players can\'t reach this phone</string>
+    <string name="stop_hosting">Stop hosting</string>
+    <string name="server_failed">The app couldn\'t start its local server: %1$s</string>
+    <string name="saved">Saved</string>
+    <string name="save_failed">Couldn\'t save the file: %1$s</string>
+</resources>

@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Is This A Mimic? — RPG Inventory</title>
+  <meta name="description" content="Track your D&D 5e party's gear, coins and encumbrance on PC or phone.">
+  <meta name="theme-color" content="#1b1814" media="(prefers-color-scheme: dark)">
+  <meta name="theme-color" content="#f4ecdc" media="(prefers-color-scheme: light)">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"><span>Is This A Mimic?</span></div>
+    <button id="char-switch" class="char-switch" type="button" aria-label="Switch character">
+      <span class="char-switch-text"><small id="campaign-name"></small><span id="char-name"></span></span>
+      <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+    </button>
+    <span id="sync-status" class="sync-status" role="status" hidden></span>
+    <nav id="nav" class="nav" aria-label="Sections"></nav>
+  </header>
+  <main>
+    <div id="view-top"></div>
+    <div id="panels" class="panels" hidden></div>
+    <div id="side" class="side" hidden></div>
+    <div id="view"></div>
+    <aside id="dock" class="dock" aria-label="Details"></aside>
+  </main>
+  <div id="modal-root"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <script src="js/vendor/qrcode.min.js"></script>
+  <script src="js/vendor/marked.min.js"></script>
+  <script src="js/vendor/purify.min.js"></script>
+  <script src="js/srd-data.js"></script>
+  <script src="js/systems/dnd5e.js"></script>
+  <script src="js/systems/dnd5e-panels.js"></script>
+  <script src="js/systems/slot-delve.js"></script>
+  <script src="js/templates.js"></script>
+  <script src="js/system.js"></script>
+  <script src="js/icons-data.js"></script>
+  <script src="js/store.js"></script>
+  <script src="js/party.js"></script>
+  <script src="js/party-ui.js"></script>
+  <script src="js/gm-controls.js"></script>
+  <script src="js/control-panels.js"></script>
+  <script src="js/treasure.js"></script>
+  <script src="js/clockwork.js"></script>
+  <script src="js/clockwork-ui.js"></script>
+  <script src="js/icons.js"></script>
+  <script src="js/documents.js"></script>
+  <script src="js/shops.js"></script>
+  <script src="js/files.js"></script>
+  <script src="js/panels.js"></script>
+  <script src="js/triggers.js"></script>
+  <script src="js/starter-drawings.js"></script>
+  <script src="js/showcase.js"></script>
+  <script src="js/app.js"></script>
+  <script src="js/radial.js"></script>
+</body>
+</html>

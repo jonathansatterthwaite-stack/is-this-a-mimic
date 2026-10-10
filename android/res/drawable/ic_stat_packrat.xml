@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Monochrome backpack for the status bar (same shape as icons/icon.svg) -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="64"
+    android:viewportHeight="64">
+    <path
+        android:fillColor="#00000000"
+        android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="4"
+        android:strokeLineCap="round"
+        android:pathData="M24,18v-3a4,4 0,0 1,4 -4h8a4,4 0,0 1,4 4v3" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M23,18h18a9,9 0,0 1,9 9v18a9,9 0,0 1,-9 9H23a9,9 0,0 1,-9 -9V27a9,9 0,0 1,9 -9zM25,36a3,3 0,0 0,-3 3v6a3,3 0,0 0,3 3h14a3,3 0,0 0,3 -3v-6a3,3 0,0 0,-3 -3zM24,26a2,2 0,0 0,0 4h16a2,2 0,0 0,0 -4z" />
+</vector>
