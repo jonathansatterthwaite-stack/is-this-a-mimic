@@ -1,4 +1,4 @@
-"""Is This A Mimic? desktop app (the entry point of IsThisAMimic.exe).
+"""Is This A Mimic(s)? desktop app (the entry point of IsThisAMimic.exe).
 
 Serves the app privately on 127.0.0.1 and opens it in its own window using
 Edge (or Chrome) app mode, which ships with Windows. Party hosting is started
@@ -72,7 +72,7 @@ def open_window(url):
 def message_box(text):
     try:
         import ctypes
-        ctypes.windll.user32.MessageBoxW(None, text, "Is This A Mimic?", 0x10)
+        ctypes.windll.user32.MessageBoxW(None, text, "Is This A Mimic(s)?", 0x10)
     except Exception:
         print(text)
 
@@ -107,7 +107,7 @@ def main():
         except OSError:
             continue
     if not srv:
-        message_box(f"Is This A Mimic? couldn't start: ports {APP_PORTS.start}-{APP_PORTS.stop - 1} are all in use.")
+        message_box(f"Is This A Mimic(s)? couldn't start: ports {APP_PORTS.start}-{APP_PORTS.stop - 1} are all in use.")
         sys.exit(1)
     open_window(f"http://127.0.0.1:{srv.server_address[1]}/")
     threading.Thread(target=watch_windows, args=(srv,), daemon=True).start()

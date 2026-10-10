@@ -295,6 +295,8 @@ input.switch:focus-visible { outline: 3px solid var(--accent-soft); outline-offs
 
 /* Drawn icons (svg-lay-tool): sized like the built-in ones; the icon editor fills the screen, in the app's colours. */
 svg.drawn-icon { overflow: visible; }
+/* Live icons swap their shapes every frame: presses go to the icon itself, so a click isn't lost. */
+svg.drawn-icon * { pointer-events: none; }
 .icon-drawer { background: var(--bg); }
 .icon-drawer-hint { margin: 0; padding: 6px 14px; border-bottom: 1px solid var(--border); max-height: 30vh; overflow: auto; }
 .icon-drawer-hint[hidden] { display: none; }
@@ -1078,6 +1080,7 @@ svg.own-colours.behind-outline { filter: drop-shadow(var(--own-line) 0 0 var(--o
 /* The item menu (js/radial.js): a ring of round buttons round the pressed tile or row, the rest of
    the screen dimmed, the option under the finger enlarged and named in the middle. */
 .tile, .row-main, .row-icon { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.row-pic { cursor: pointer; }
 .radial { position: fixed; inset: 0; z-index: 80; opacity: 0; transition: opacity .12s; }
 .radial.shown { opacity: 1; }
 .radial-lift { position: fixed; border-radius: 12px; pointer-events: none; box-shadow: 0 0 0 3px var(--accent), 0 0 0 200vmax rgb(0 0 0 / .32); }

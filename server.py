@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Is This A Mimic? party server.
+"""Is This A Mimic(s)? party server.
 
 Serves the app on your local network and keeps every player's character on
 this computer so players can trade with each other.
@@ -1979,7 +1979,7 @@ def main():
         server = QuietServer(("0.0.0.0", port), Handler)
     except OSError as e:
         sys.exit(f"Couldn't start on port {port} ({e}). Is it already running? Try: python server.py {port + 1}")
-    print("\n  Is This A Mimic? party server is running!\n")
+    print("\n  Is This A Mimic(s)? party server is running!\n")
     print(f"  On this computer:   http://localhost:{port}")
     addrs = lan_addresses()
     if addrs:

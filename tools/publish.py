@@ -1,4 +1,4 @@
-"""Publish Is This A Mimic? to its public GitHub repository.
+"""Publish Is This A Mimic(s)? to its public GitHub repository.
 
     python tools/publish.py [-m MESSAGE]   stage, commit and push (the Pages site redeploys)
     python tools/publish.py --release      ...then build IsThisAMimic.exe and .apk and publish a release
@@ -131,7 +131,7 @@ def release(title_extra=None, notes_file=None, version=None):
     if notes_file:
         with open(notes_file, encoding="utf8") as f:
             notes = f.read().strip() + "\n\n---\n\n" + notes
-    title = f"Is This A Mimic? {tag}" + (f" — {title_extra}" if title_extra else "")
+    title = f"Is This A Mimic(s)? {tag}" + (f" — {title_extra}" if title_extra else "")
     run("gh", "release", "create", tag, "--repo", REPO, "--target", "main", "--title", title, "--notes", notes,
         os.path.join(STAGE, "dist", "IsThisAMimic.exe"), os.path.join(STAGE, "dist", "IsThisAMimic.apk"))
     print(f"Released {tag}: https://github.com/{REPO}/releases/tag/{tag}")
@@ -140,7 +140,7 @@ def release(title_extra=None, notes_file=None, version=None):
 def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # (messages may have − or …; Windows' console is cp1252)
     args = sys.argv[1:]
-    message = args[args.index("-m") + 1] if "-m" in args else f"Update Is This A Mimic? ({datetime.date.today():%Y-%m-%d})"
+    message = args[args.index("-m") + 1] if "-m" in args else f"Update Is This A Mimic(s)? ({datetime.date.today():%Y-%m-%d})"
     stage()
     commit_and_push(message)
     opt = lambda name: args[args.index(name) + 1] if name in args else None

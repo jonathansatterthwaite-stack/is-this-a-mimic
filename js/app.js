@@ -1435,6 +1435,13 @@ function entryTile(st, e, showPath) {
   return show("card") ? withFill(el, fillLevel(char, e)) : el;
 }
 
+// A row's picture opens the item, as its name does (the name's button is what keyboards reach).
+function rowPicture(el, open) {
+  el.classList.add("row-pic");
+  el.addEventListener("click", open);
+  return el;
+}
+
 // A row shows the parts its list's rows show (displayShows); without its card, no background or fill.
 function entryRow(st, e, showPath = false) {
   const char = st.char, it = currentItem(e, char); // as it is now (its active layers)
@@ -1444,8 +1451,8 @@ function entryRow(st, e, showPath = false) {
   const details = show("details") && [liquidLabel(e) || containerLoad(char, e) || itemSummary(it), e.notes, st.sub?.(e)].filter(Boolean).join(" — ");
   const shaped = rowShape(st.prefs || viewPrefs());
   const row = h("div", { class: ["row", e.equipped && "equipped", st.rowClass?.(e), !show("card") && "plain", !show("colour") && "no-colour", !show("behind") && "no-behind"].filter(Boolean).join(" "), ...dragFrom(st, e) },
-    show("image") && (shaped ? h("span", { class: "row-shape", "aria-hidden": "true" }, itemIcon(it, "row-icon", () => entryIconVars(char, e)))
-      : itemIcon(it, "row-icon", () => entryIconVars(char, e))),
+    show("image") && rowPicture(shaped ? h("span", { class: "row-shape", "aria-hidden": "true" }, itemIcon(it, "row-icon", () => entryIconVars(char, e)))
+      : itemIcon(it, "row-icon", () => entryIconVars(char, e)), () => st.open(e)),
     h("button", { class: "row-main", "aria-label": show("name") ? null : entryName(e), onclick: () => st.open(e) },
       h("div", { class: "row-title" }, show("name") && entryName(e),
         show("count") && !(st.setQty && (st.canCount?.(e) ?? true)) && e.qty > 1 && h("span", { class: "muted" }, ` ×${e.qty.toLocaleString()}`),
@@ -4675,7 +4682,7 @@ function foundElsewhereBanner() {
   return h("section", { class: "found-banner" },
     icon("users"),
     h("div", null,
-      h("b", null, `Is This A Mimic? is running on this ${f.android ? "phone" : "PC"}`),
+      h("b", null, `Is This A Mimic(s)? is running on this ${f.android ? "phone" : "PC"}`),
       h("p", { class: "muted small" }, "Your saved characters are probably there. This copy has its own, separate storage and nothing saved yet.")),
     h("a", { class: "btn primary", href: f.url }, "Open it there"),
     h("button", { class: "btn", onclick: dismiss }, "Not now"));

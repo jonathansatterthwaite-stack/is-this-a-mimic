@@ -1,6 +1,6 @@
 {
-  "name": "Is This A Mimic? — RPG Inventory",
-  "short_name": "Mimic?",
+  "name": "Is This A Mimic(s)? — RPG Inventory",
+  "short_name": "ITAM(s)?",
   "description": "Track D&D 5e gear, coins and encumbrance.",
   "start_url": "./#inventory",
   "scope": "./",

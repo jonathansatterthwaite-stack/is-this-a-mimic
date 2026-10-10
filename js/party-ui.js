@@ -451,7 +451,7 @@ function hostPartySection() {
       h("button", { class: "btn primary", onclick: () => startHosting(port) }, icon("users"), "Start hosting")),
     h("p", { class: "muted small" }, party.app.android
       ? "Keep the app running while you host — a notification shows while the party is on. Players need to be on the same Wi-Fi as this phone, or connected to its hotspot."
-      : "If Windows asks whether Is This A Mimic? may use the network, allow it on private networks."));
+      : "If Windows asks whether Is This A Mimic(s)? may use the network, allow it on private networks."));
 }
 
 // ------------------------------------------------------------------ joining another host (desktop & Android app)
@@ -625,7 +625,7 @@ function quitSection() {
           !confirm("Players are connected. Quitting stops the party for everyone. Quit anyway?")) return;
       ui.leaving = true;
       try { await party.quit(); } catch {}
-      document.body.replaceChildren(h("div", { class: "empty" }, h("h2", null, "Is This A Mimic? has closed"), h("p", null, "You can close this window.")));
+      document.body.replaceChildren(h("div", { class: "empty" }, h("h2", null, "Is This A Mimic(s)? has closed"), h("p", null, "You can close this window.")));
       window.close();
     } }, icon("x"), "Quit"));
 }

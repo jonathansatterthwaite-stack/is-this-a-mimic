@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <string name="app_name">Is This A Mimic?</string>
+    <string name="app_name">ITAM(s)?</string>
     <string name="channel_hosting">Party hosting</string>
     <string name="channel_hosting_desc">Shown while this phone is hosting a party</string>
     <string name="hosting_title">Hosting a party</string>

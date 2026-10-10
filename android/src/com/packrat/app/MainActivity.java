@@ -24,7 +24,7 @@ import java.net.InetAddress;
 import java.nio.charset.StandardCharsets;
 
 /**
- * Is This A Mimic? in a WebView, served by this app's own PartyServer, exactly like
+ * Is This A Mimic(s)? in a WebView, served by this app's own PartyServer, exactly like
  * the Windows app. Joining another host's party happens from this page (it talks
  * to that host across the network), so the phone's own saved characters stay in reach.
  */

@@ -1,12 +1,12 @@
-# Is This A Mimic?
+# Is This A Mimic(s)? (ITAM(s)?)
 
 **An inventory manager for tabletop RPGs.** Every character's gear, coins and containers, on PC, phone or in the browser: on your own, or shared at the table over your own Wi-Fi, with no account and no internet needed.
 
 **[Windows app](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/IsThisAMimic.exe)** · **[Android app](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/IsThisAMimic.apk)** · **[Use it in your browser](https://jonathansatterthwaite-stack.github.io/is-this-a-mimic/app/)** · [User guide](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki) · [All releases](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases)
 
-*Is This A Mimic? is the new name of Pack Rat, as a fresh start: install it anew. It replaces Pack Rat (its data isn't kept, and Pack Rat's files can't be opened).*
+*Is This A Mimic(s)? is the new name of Pack Rat, as a fresh start: install it anew. It replaces Pack Rat (its data isn't kept, and Pack Rat's files can't be opened).*
 
-![Is This A Mimic?: an inventory in tiles](https://raw.githubusercontent.com/wiki/jonathansatterthwaite-stack/is-this-a-mimic/images/inventory-tiles.png)
+![Is This A Mimic(s)?: an inventory in tiles](https://raw.githubusercontent.com/wiki/jonathansatterthwaite-stack/is-this-a-mimic/images/inventory-tiles.png)
 
 ## What it does
 
@@ -28,7 +28,7 @@ Download the app for Windows or Android, or open it in your browser, and the [Ge
 
 ## For developers
 
-Is This A Mimic? is plain HTML, CSS and JavaScript with no build step; the party server is Python (standard library only), with a Java port in the Android app. Running it from source, building the apps, updating the item data and a map of the files: [Developing](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki/Developing).
+Is This A Mimic(s)? is plain HTML, CSS and JavaScript with no build step; the party server is Python (standard library only), with a Java port in the Android app. Running it from source, building the apps, updating the item data and a map of the files: [Developing](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki/Developing).
 
 ## Credits
 
