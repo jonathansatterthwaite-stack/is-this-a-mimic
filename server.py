@@ -9,7 +9,7 @@ this computer so players can trade with each other.
 Players on the same Wi-Fi/LAN open the address printed at startup. Only the
 standard library is used, so there is nothing to install.
 
-The desktop app (desktop.py / IsThisAMimic.exe) imports this module instead: it
+The desktop app (desktop.py / ITAMSapp.exe) imports this module instead: it
 serves the app privately on 127.0.0.1 and only opens the network-facing
 server while the player chooses to host a party.
 """

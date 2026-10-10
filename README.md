@@ -2,7 +2,7 @@
 
 **An inventory manager for tabletop RPGs.** Every character's gear, coins and containers, on PC, phone or in the browser: on your own, or shared at the table over your own Wi-Fi, with no account and no internet needed.
 
-**[Windows app](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/IsThisAMimic.exe)** · **[Android app](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/IsThisAMimic.apk)** · **[Use it in your browser](https://jonathansatterthwaite-stack.github.io/is-this-a-mimic/app/)** · [User guide](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki) · [All releases](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases)
+**[Windows app](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/ITAMSapp.exe)** · **[Android app](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest/download/ITAMSapp.apk)** · **[Use it in your browser](https://jonathansatterthwaite-stack.github.io/is-this-a-mimic/app/)** · [User guide](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki) · [All releases](https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases)
 
 *Is This A Mimic(s)? is the new name of Pack Rat, as a fresh start: install it anew. It replaces Pack Rat (its data isn't kept, and Pack Rat's files can't be opened).*
 

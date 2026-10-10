@@ -1,7 +1,7 @@
 """Publish Is This A Mimic(s)? to its public GitHub repository.
 
     python tools/publish.py [-m MESSAGE]   stage, commit and push (the Pages site redeploys)
-    python tools/publish.py --release      ...then build IsThisAMimic.exe and .apk and publish a release
+    python tools/publish.py --release      ...then build ITAMSapp.exe and .apk and publish a release
         [--version X.Y.Z]                  its version (default: the next minor one, v1.0.0 for the first)
         [--title TEXT]                     added to the release's title (e.g. "BIG CHANGE: drawn icons")
         [--notes FILE]                     Markdown shown at the top of the release notes
@@ -118,14 +118,15 @@ def next_version(tags):
 def release(title_extra=None, notes_file=None, version=None):
     # Sign with the same key as local builds so phones can update in place.
     shutil.copytree(os.path.join(ROOT, "android", "keystore"), os.path.join(STAGE, "android", "keystore"), dirs_exist_ok=True)
-    run(sys.executable, os.path.join(STAGE, "tools", "build_exe.py"))
-    run(sys.executable, os.path.join(STAGE, "tools", "build_apk.py"))
     tags = set(git("tag", "--list", capture=True).splitlines()) | set(
         run("gh", "release", "list", "--repo", REPO, "--json", "tagName", "--jq", ".[].tagName", capture=True).splitlines())
     tag = ("v" + version.lstrip("v")) if version else next_version(tags)
     if tag in tags:
         sys.exit(f"{tag} is already released")
-    notes = ("**Downloads:** `IsThisAMimic.exe` for Windows 10/11, `IsThisAMimic.apk` for Android 7.0+, "
+    os.environ["MIMIC_VERSION"] = tag  # (the exe's version details)
+    run(sys.executable, os.path.join(STAGE, "tools", "build_exe.py"))
+    run(sys.executable, os.path.join(STAGE, "tools", "build_apk.py"))
+    notes = ("**Downloads:** `ITAMSapp.exe` for Windows 10/11, `ITAMSapp.apk` for Android 7.0+, "
              f"or use it in the browser at https://{REPO.split('/')[0]}.github.io/{REPO.split('/')[1]}/app/\n\n"
              "Windows may show a SmartScreen warning because the app isn't code-signed: choose *More info → Run anyway*.")
     if notes_file:
@@ -133,7 +134,7 @@ def release(title_extra=None, notes_file=None, version=None):
             notes = f.read().strip() + "\n\n---\n\n" + notes
     title = f"Is This A Mimic(s)? {tag}" + (f" — {title_extra}" if title_extra else "")
     run("gh", "release", "create", tag, "--repo", REPO, "--target", "main", "--title", title, "--notes", notes,
-        os.path.join(STAGE, "dist", "IsThisAMimic.exe"), os.path.join(STAGE, "dist", "IsThisAMimic.apk"))
+        os.path.join(STAGE, "dist", "ITAMSapp.exe"), os.path.join(STAGE, "dist", "ITAMSapp.apk"))
     print(f"Released {tag}: https://github.com/{REPO}/releases/tag/{tag}")
 
 

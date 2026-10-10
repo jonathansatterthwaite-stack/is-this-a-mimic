@@ -1,4 +1,4 @@
-"""Is This A Mimic(s)? desktop app (the entry point of IsThisAMimic.exe).
+"""Is This A Mimic(s)? desktop app (the entry point of ITAMSapp.exe).
 
 Serves the app privately on 127.0.0.1 and opens it in its own window using
 Edge (or Chrome) app mode, which ships with Windows. Party hosting is started
@@ -6,7 +6,7 @@ and stopped from inside the app. The process exits once every app window has
 been closed.
 
     python desktop.py          run from source
-    python tools/build_exe.py  build dist/IsThisAMimic.exe
+    python tools/build_exe.py  build dist/ITAMSapp.exe
 """
 import json
 import os

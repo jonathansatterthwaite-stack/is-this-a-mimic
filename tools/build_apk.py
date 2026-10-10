@@ -1,4 +1,4 @@
-"""Build dist/IsThisAMimic.apk (Android) without Gradle or Android Studio.
+"""Build dist/ITAMSapp.apk (Android) without Gradle or Android Studio.
 
 Uses the Android SDK command-line build tools directly:
 aapt2 (resources) -> javac -> d8 (dex) -> zipalign -> apksigner.
@@ -86,7 +86,7 @@ def keystore():
     with open(pw_file, "w") as f:
         f.write(pw + "\n")
     with open(os.path.join(KEYSTORE_DIR, "README.txt"), "w") as f:
-        f.write("Signing key for IsThisAMimic.apk (it replaced PackRat.apk: the same key, so it installs over it). Keep both files and back them up:\n"
+        f.write("Signing key for ITAMSapp.apk (it replaced PackRat.apk, then IsThisAMimic.apk: the same key, so it installs over it). Keep both files and back them up:\n"
                 "Android only installs updates signed with the same key. Don't share them.\n")
     return ks, pw
 
@@ -161,7 +161,7 @@ def main():
     print("Signing")
     ks, pw = keystore()
     os.makedirs(DIST, exist_ok=True)
-    out = os.path.join(DIST, "IsThisAMimic.apk")
+    out = os.path.join(DIST, "ITAMSapp.apk")
     run(tool("apksigner"), "sign", "--ks", ks, "--ks-pass", f"pass:{pw}", "--ks-key-alias", "packrat",
         "--min-sdk-version", str(MIN_SDK), "--out", out, aligned)
     run(tool("apksigner"), "verify", "--min-sdk-version", str(MIN_SDK), out)
