@@ -16,12 +16,15 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"><span>Is This A Mimic(s)?</span></div>
-    <button id="char-switch" class="char-switch" type="button" aria-label="Switch character">
-      <span class="char-switch-text"><small id="campaign-name"></small><span id="char-name"></span></span>
-      <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
-    </button>
-    <span id="sync-status" class="sync-status" role="status" hidden></span>
+    <div class="topbar-left">
+      <div class="brand"><img src="icons/icon.svg" alt="" width="28" height="28"><span>Is This A Mimic(s)?</span></div>
+      <button id="char-switch" class="char-switch" type="button" aria-label="Switch character">
+        <span class="char-switch-text"><small id="campaign-name"></small><span id="char-name"></span></span>
+        <svg viewBox="0 0 24 24" class="icon" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg>
+      </button>
+      <span id="sync-status" class="sync-status" role="status" hidden></span>
+    </div>
+    <div id="mode-switch" class="mode-switch"></div>
     <nav id="nav" class="nav" aria-label="Sections"></nav>
   </header>
   <main>

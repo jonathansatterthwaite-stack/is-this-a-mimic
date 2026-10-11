@@ -87,7 +87,22 @@ function panelHelper() {
     get state() { return state; },
     glossary: boot.glossary,
     h, icon, markup,
-    render(el, ...kids) { el.replaceChildren(); append(el, kids); resize(); },
+    // Redraws el; a field being typed in stays as it is (its value, the caret, the focus): it's
+    // swapped back in for its new twin (the field with the same aria-label or name).
+    render(el, ...kids) {
+      const a = document.activeElement, keyOf = x => x.getAttribute("aria-label") || x.getAttribute("name");
+      const keep = a && el.contains(a) && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && keyOf(a) ? a : null;
+      let sel = null;
+      try { sel = keep && keep.selectionStart != null ? [keep.selectionStart, keep.selectionEnd] : null; } catch {}
+      el.replaceChildren(); append(el, kids);
+      const twin = keep && [...el.querySelectorAll(keep.tagName)].find(x => keyOf(x) === keyOf(keep));
+      if (twin) {
+        twin.replaceWith(keep);
+        keep.focus({ preventScroll: true });
+        try { if (sel) keep.setSelectionRange(sel[0], sel[1]); } catch {}
+      }
+      resize();
+    },
     fmtMod: n => (n >= 0 ? "+" : "") + n,
   };
   addEventListener("DOMContentLoaded", () => { new ResizeObserver(resize).observe(document.body); send("ready"); resize(); });

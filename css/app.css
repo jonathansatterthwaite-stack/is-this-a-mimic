@@ -90,13 +90,30 @@ button { cursor: pointer; }
 /* ------------------------------------------------------------ top bar / nav */
 .topbar {
   position: sticky; top: 0; z-index: 10;
-  display: flex; align-items: center; gap: 12px;
+  /* the left (brand, character), the mode switch in the middle, the sections on the right */
+  display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 12px;
   padding: calc(8px + env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) 8px max(16px, env(safe-area-inset-left));
   background: color-mix(in srgb, var(--bg) 88%, transparent);
   backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
   border-bottom: 1px solid var(--border);
 }
-.brand { display: flex; align-items: center; gap: 8px; font-family: var(--display); font-size: 1.2rem; font-weight: 700; }
+.topbar-left { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mode-switch { justify-self: center; }
+.mode-switch:empty { display: none; }
+/* small, as the inset switches elsewhere: words, or icons when there's no room (fitModeSwitch) */
+/* Beside the character (the middle's taken): a row, the character's name shortening first, as before. */
+.topbar.mode-beside { display: flex; }
+.topbar.mode-beside .topbar-left { flex: 0 1 auto; }
+.topbar.mode-beside .mode-switch { flex: none; }
+.topbar.mode-beside .nav { margin-left: auto; flex: none; }
+.topbar.tight .brand span { display: none; }
+.seg.seg-slide.seg-small { --pad: 2px; }
+.seg.seg-slide.seg-small button { height: 26px; padding: 0 10px; font-size: .82rem; display: inline-flex; align-items: center; justify-content: center; gap: 0; }
+.seg.seg-slide.seg-small button .icon { width: 16px; height: 16px; display: none; }
+.mode-switch.compact .seg.seg-slide.seg-small button { padding: 0 8px; }
+.mode-switch.compact .seg.seg-slide.seg-small button .icon { display: block; }
+.mode-switch.compact .mode-word { display: none; }
+.brand { display: flex; align-items: center; gap: 8px; font-family: var(--display); font-size: 1.2rem; font-weight: 700; white-space: nowrap; flex: none; }
 .char-switch {
   display: flex; align-items: center; gap: 6px; min-width: 0;
   background: var(--surface); border: 1px solid var(--border); border-radius: 999px;
@@ -110,7 +127,7 @@ button { cursor: pointer; }
   background: var(--accent-soft); text-align: left; color: var(--text); }
 .campaign-line > span:nth-child(2) { display: flex; flex-direction: column; flex: 1; }
 .campaign-line .icon { color: var(--accent); }
-.nav { display: flex; gap: 4px; margin-left: auto; }
+.nav { display: flex; gap: 4px; justify-self: end; min-width: 0; }
 .nav-btn {
   display: flex; align-items: center; gap: 6px; border: 0; background: none;
   padding: 8px 12px; border-radius: 8px; color: var(--muted); font-weight: 600;
@@ -1434,7 +1451,11 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 @media (max-width: 720px) {
   body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
   /* backdrop-filter would make the fixed bottom nav position relative to the header */
-  .topbar { padding-left: 16px; padding-right: 16px; backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--bg); }
+  .topbar { padding-left: 16px; padding-right: 16px; backdrop-filter: none; -webkit-backdrop-filter: none; background: var(--bg);
+    display: flex; } /* (the sections are at the bottom: the character, then the switch on the right) */
+  .topbar-left { flex: 1; }
+  .mode-switch { margin-left: auto; flex: none; }
+  .topbar .nav, .topbar.mode-beside .nav { margin: 0; justify-self: auto; } /* (the bottom bar: the whole width) */
   .brand span { display: none; }
   .char-switch { flex: 1; justify-content: space-between; }
   .char-switch span { max-width: none; }

@@ -527,6 +527,50 @@ const usesSetting = (key, sys = activeSystem()) => (sys.campaignSettings || []).
 //   Play hides the catalog, making and editing items, a GM's shop, panel and table editing, and
 //   counting stacks up and down, except for what counts in play (ammunition, rations, potions…:
 //   the Stacks feature's countInPlay, else its type's default).
+// The mode (see playMode): Play or Edit, for players and GMs alike. Per device. Set in the top bar
+// (modeSwitch) or Settings.
+function setAppMode(mode) {
+  ui.mode = mode;
+  writePref("mimic-mode", mode);
+  render();
+  toast(mode === "play" ? "Play mode: the catalog and editing are put away" : "Edit mode: make and change things");
+}
+
+// The top bar's Play / Edit switch: centred on a wide screen, on the right on a phone. Words where
+// there's room, icons where there isn't; where the middle is taken (the sections' tabs reach it), it
+// sits beside the character instead. The first of those that fits (fitModeSwitch).
+let modeSwitchFor = null;
+function drawModeSwitch() {
+  const slot = document.getElementById("mode-switch");
+  if (!slot) return;
+  if (!modeSwitchWatch && window.ResizeObserver) (modeSwitchWatch = new ResizeObserver(() => fitModeSwitch())).observe(slot.closest(".topbar"));
+  if (modeSwitchFor !== ui.mode) {
+    modeSwitchFor = ui.mode;
+    const opt = (k, ic, label) => [k, [icon(ic), h("span", { class: "mode-word" }, label)], label + " mode"];
+    slot.replaceChildren(slideSwitch("Mode", [opt("play", "dice", "Play"), opt("edit", "edit", "Edit")], ui.mode, setAppMode, { even: true, cls: "seg-small" }));
+  }
+  fitModeSwitch();
+}
+function fitModeSwitch() {
+  const slot = document.getElementById("mode-switch"), bar = slot?.closest(".topbar");
+  if (!slot || !bar) return;
+  const name = document.querySelector(".char-switch-text"), nav = document.getElementById("nav"), char = document.getElementById("char-switch");
+  const crowded = () => {
+    const r = slot.getBoundingClientRect(), left = char.getBoundingClientRect();
+    const navR = nav && getComputedStyle(nav).position !== "fixed" ? nav.getBoundingClientRect() : null;
+    return bar.scrollWidth > bar.clientWidth + 1 || r.left < left.right + 8 || (navR && r.right > navR.left - 8)
+      || [name, ...(name?.children || [])].some(x => x && x.scrollWidth > x.clientWidth + 1);
+  };
+  // (last, the app's name goes, leaving its logo, as on a phone)
+  for (const [beside, compact, tight] of [[false, false, false], [false, true, false], [true, false, false], [true, true, false], [true, true, true]]) {
+    bar.classList.toggle("mode-beside", beside);
+    bar.classList.toggle("tight", tight);
+    slot.classList.toggle("compact", compact);
+    if (!crowded()) return;
+  }
+}
+let modeSwitchWatch = null;
+
 function readMode() {
   return kv.get("mimic-mode") === "play" ? "play" : "edit";
 }
@@ -575,6 +619,7 @@ function render() {
   const joining = party.active && !party.linked().length && !party.isGm() && !party.isHost();
   if (!viewVisible(ui.view)) ui.view = isGmDevice() && viewVisible("gm") ? "gm" : Object.keys(VIEWS).find(viewVisible);
   // A GM who plays no character is just the GM.
+  drawModeSwitch();
   document.getElementById("char-name").textContent = joining ? "Join the party"
     : isGmDevice() && !gmHasCharacters() && ui.view !== "inventory" ? termCap("gameMaster") : char ? char.name : "";
   document.getElementById("campaign-name").textContent = store.campaign().name;
@@ -4382,7 +4427,7 @@ const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimi
 
 // ------------------------------------------------------------------ updates
 // The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
-const APP_VERSION = "1.0.5";
+const APP_VERSION = "1.0.6";
 const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
 const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
 const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);
@@ -4469,12 +4514,6 @@ function updateCard() {
 // erasing everything in Files.
 function renderSettings() {
   // The mode (see playMode): Play or Edit, for players and GMs alike. Per device.
-  const setMode = mode => {
-    ui.mode = mode;
-    writePref("mimic-mode", mode);
-    render();
-    toast(mode === "play" ? "Play mode: the catalog and editing are put away" : "Edit mode: make and change things");
-  };
   // Role: a GM prepares campaigns' shops, values and controls without hosting (and gets the GM
   // tab); in a party, the host decides who's GM. Per device.
   const setRole = role => {
@@ -4489,7 +4528,7 @@ function renderSettings() {
         h("span", { class: "muted small" }, isGmDevice()
           ? "Play puts the catalog and editing away while you run the game: shops still open and close, treasure is still given out, and panels still work. Edit is for preparing: making items, shops, panels and tables."
           : `Play is for the table: your gear comes from the ${term("gm")}, shops, trades and treasure, and only things like ammunition, rations and potions count up and down. Items can still be renamed and written in. Edit lets you make and change items.`)),
-      slideSwitch("Mode", [["play", "Play"], ["edit", "Edit"]], ui.mode, setMode, { even: true, cls: "seg-field" })));
+      slideSwitch("Mode", [["play", "Play"], ["edit", "Edit"]], ui.mode, setAppMode, { even: true, cls: "seg-field" })));
   const roleBox = h("section", { class: "role-box" },
     h("div", { class: "switch-row" },
       h("span", null, h("b", null, "Role on this device"),

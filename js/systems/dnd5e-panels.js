@@ -18,10 +18,12 @@ function dnd5eRules() {
     const shield = worn.find(x => has(x, "armor") && x.item.category === "Shield");
     let ac = 10 + dex, parts = ["10 + Dex " + fmtMod(dex)];
     if (armor) {
-      const a = armor.item, d = a.dex === "full" ? dex : a.dex === "max2" ? Math.min(dex, 2) : 0;
+      // How much Dex it lets count (an armor without it set: by its category, light armor's all of it).
+      const a = armor.item, rule = a.dex || { Medium: "max2", Heavy: "none" }[a.category] || "full";
+      const d = rule === "full" ? dex : rule === "max2" ? Math.min(dex, 2) : 0;
       ac = (a.ac || 10) + d + (a.bonus || 0);
       parts = [armor.name + " " + ((a.ac || 10) + (a.bonus || 0))];
-      if (a.dex !== "none") parts.push("Dex " + fmtMod(d));
+      if (rule !== "none") parts.push("Dex " + fmtMod(d));
     }
     if (shield) {
       const b = (shield.item.ac || 2) + (shield.item.bonus || 0);
@@ -115,11 +117,17 @@ function dnd5eCharacterPanel() {
   const { h, icon, request, fmtMod } = Mimic;
   const root = document.getElementById("root");
 
+  // An ability score: saved as it's typed (after a pause) and when it's left, so Armor Class and
+  // the rest follow at once (the field being typed in stays put while the panel redraws).
+  let typing = null;
   const ability = (state, label, key) => {
     const v = state.character.stats[key] || 10;
+    const save = e => { clearTimeout(typing); const n = Math.round(+e.target.value);
+      if (n >= 1 && n <= 30 && n !== (Mimic.state.character.stats[key] || 10)) request("setStat", { key, value: n }); };
     return h("label", { class: "ability" }, h("span", null, label),
-      h("input", { type: "number", inputmode: "numeric", min: 1, max: 30, value: v,
-        onchange: e => request("setStat", { key, value: Math.max(1, Math.min(30, Math.round(+e.target.value) || 10)) }) }),
+      h("input", { type: "number", inputmode: "numeric", min: 1, max: 30, value: v, "aria-label": label,
+        oninput: e => { clearTimeout(typing); typing = setTimeout(() => save(e), 350); },
+        onchange: e => { save(e); if (!(Math.round(+e.target.value) >= 1)) e.target.value = Mimic.state.character.stats[key] || 10; } }),
       h("small", null, fmtMod(DnD.mod(v))));
   };
 
