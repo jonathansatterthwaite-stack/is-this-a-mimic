@@ -524,7 +524,7 @@ function openSellToShop(shop) {
   const draw = () => {
     const char = store.char();
     // Cards in a deck are sold with it, like a container's contents.
-    const entries = char ? byName(char.items.filter(e => !inDeck(char, e))) : [];
+    const entries = char ? byName(char.items.filter(e => !inDeck(char, e) && !hiddenFromMe(char, e))) : [];
     setChildren(list, entries.map(e => {
       const hasContents = char.items.some(x => x.parent === e.uid && !x.item.card);
       const unit = sellOffer(shop, e, e.item.bundle > 1 ? Math.min(e.qty, e.item.bundle) : 1);

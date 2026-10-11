@@ -247,7 +247,7 @@ function memberCard(c) {
       // The host can clear out players who have left (only while they're away).
       party.isHost() && !c.online && iconBtn("trash", `Remove ${c.name} from the party`, () => removeMember(c), "danger-hover")),
     open && (c.items.length
-      ? h("ul", { class: "member-items" }, byName(c.items.filter(e => !inDeck(c, e))).map(e =>
+      ? h("ul", { class: "member-items" }, byName(c.items.filter(e => !inDeck(c, e) && !hiddenFromMe(c, e))).map(e =>
         h("li", null, itemIcon(e.item, "row-icon small"), e.qty > 1 ? `${e.qty} × ` : "", entryName(e), h("span", { class: "muted" }, where(e)))))
       : h("p", { class: "muted pad" }, "Nothing carried.")));
 }

@@ -711,8 +711,20 @@ function subChips(tplId, active, count, onPick) {
   ], "sub-chips");
 }
 
-// What the inventory lists: everything except the cards inside decks (those show in the deck's details).
-const listed = char => char.items.filter(e => !inDeck(char, e));
+// Who sees an item in lists (item.visibility): everyone, or "gm", only the GM. A player still has a
+// GM-only item, and it still counts (its weight, its coins), but it isn't listed, nor anything in it;
+// its own details still show what's in it (the coin purse: the Coins panel opens it).
+const ITEM_VISIBILITY = [["all", "Everyone"], ["gm", "GM only"]];
+function hiddenFromMe(char, e) {
+  if (isGmDevice()) return false;
+  for (let x = e, n = 0; x && n < 50; x = x.parent && char.items.find(y => y.uid === x.parent), n++)
+    if (x.item?.visibility === "gm") return true;
+  return false;
+}
+
+// What the inventory lists: everything except the cards inside decks (those show in the deck's
+// details) and what's hidden from this device (hiddenFromMe).
+const listed = char => char.items.filter(e => !inDeck(char, e) && !hiddenFromMe(char, e));
 
 function matchesSearch(item, q) {
   if (!q) return true;
@@ -1181,7 +1193,7 @@ function storageTree(st) {
         h("span", { class: "muted" }, fmtWeight(weight))),
       entryList(st, sortEntries(st, hits), true))];
   }
-  const top = childrenOf(char, null).filter(e => !inDeck(char, e));
+  const top = childrenOf(char, null).filter(e => !inDeck(char, e) && !hiddenFromMe(char, e));
   const containers = orderContainers(st, top.filter(e => holdsItems(char, e) && hasSection(e)));
   const key = foldKey(st, "person"), collapsed = ui.collapsed.has(key);
   const toggle = () => { collapsed ? ui.collapsed.delete(key) : ui.collapsed.add(key); render(); };
@@ -1217,7 +1229,7 @@ function moveContainer(st, siblings, index, dir) {
 
 function containerGroup(st, c, depth, siblings = [c], index = 0) {
   const char = st.char;
-  const all = sortEntries(st, childrenOf(char, c.uid).filter(e => !inDeck(char, e)));
+  const all = sortEntries(st, childrenOf(char, c.uid).filter(e => !inDeck(char, e) && !hiddenFromMe(char, e)));
   const comps = compartmentsOf(c);
   const inMain = k => !comps.some(x => x.id === entryComp(k));
   // Sealed: what's inside isn't shown (but to the GM). Only in its details: shown there.
@@ -1430,6 +1442,7 @@ function entryList(st, entries, showPath = false) {
 // An entry's tags: equipped, states, charges, where it is (when listed away from it), the list's own.
 function entryTags(st, e, it, path) {
   return [e.equipped && h("span", { class: "tag on" }, equipWord(e)),
+    it.visibility === "gm" && isGmDevice() && h("span", { class: "tag gm-only", title: "Players don't see it in their lists" }, "GM only"),
     statesOnFor(st.char, e).map(s => h("span", { class: "tag attuned" }, s.label.toLowerCase())),
     e.charges != null && h("span", { class: "tag" }, `${e.charges}/${it.maxCharges} charges`),
     path && h("span", { class: "tag" }, path), st.tags?.(e)];
@@ -2049,7 +2062,9 @@ function fieldDisplay(f, v) {
 function containerOptions(char, exclude) {
   const entry = exclude && char.items.find(x => x.uid === exclude);
   return [h("option", { value: "" }, "On person"),
-    ...char.items.filter(c => holdsItems(char, c) && c.uid !== exclude && !(exclude && isDescendant(char, c.uid, exclude)))
+    // (a container hidden from this device isn't offered, but the one it's in already is: the purse's coins)
+    ...char.items.filter(c => holdsItems(char, c) && c.uid !== exclude && !(exclude && isDescendant(char, c.uid, exclude))
+      && (!hiddenFromMe(char, c) || c.uid === entry?.parent))
       .flatMap(c => {
         const name = entryName(c) + (c.parent ? " (nested)" : "");
         // Counted containers are only offered for what they take, with how full they are.
@@ -2748,7 +2763,7 @@ function purseTools(char, close) {
     const c = store.char();
     setChildren(totals, coinChips(c.coins), h("span", { class: "muted small" }, `= ${fmtCost(coinTotalCp(c.coins))}`));
     const byPlace = new Map();
-    for (const e of c.items.filter(x => isCoinEntry(x) && !inPurse(c, x) && !inSealed(c, x))) { // (a sealed container's: not shown)
+    for (const e of c.items.filter(x => isCoinEntry(x) && !inPurse(c, x) && !inSealed(c, x) && !hiddenFromMe(c, x))) { // (a sealed or hidden container's: not shown)
       const where = e.parent ? c.items.find(x => x.uid === e.parent) : null, k = where?.uid || "";
       if (!byPlace.has(k)) byPlace.set(k, { where, coins: [] });
       byPlace.get(k).coins.push(e);
@@ -3089,6 +3104,11 @@ function openItemForm(item, opts = {}) {
   let at = els.findIndex(([k]) => k === "description");
   if (at < 0) at = els.findIndex(([k]) => k === "source");
   els.splice(at < 0 ? els.length : at, 0, ["features", features]);
+  // Who sees it in lists (the GM decides; set only when changed, so "all" can override a GM-only default).
+  if (isGmDevice()) els.push(["visibility", h("label", { class: "field" }, h("span", null, "Visible to"),
+    h("select", { "aria-label": "Visible to", onchange: e => { draft.visibility = e.target.value; } },
+      ITEM_VISIBILITY.map(([k, l]) => h("option", { value: k, selected: (draft.visibility || "all") === k }, l))),
+    h("span", { class: "muted small" }, "GM only: players don't see it (or what's in it) in their lists. It still counts, and its details still open where the app links to them."))]);
   const form = h("form", { class: "form grid", onsubmit: e => { e.preventDefault(); save(); } }, els.map(([, el]) => el));
   let close;
 
@@ -4362,7 +4382,7 @@ const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimi
 
 // ------------------------------------------------------------------ updates
 // The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
-const APP_VERSION = "1.0.4";
+const APP_VERSION = "1.0.5";
 const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
 const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
 const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);

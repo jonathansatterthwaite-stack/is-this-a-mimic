@@ -942,12 +942,14 @@ function inPurse(char, e) {
 // The coin purse: a container that takes the coins, showing them in its details.
 function purseItem() {
   return { name: "Coin purse", ...(systemIndex().templates.has("container") ? { type: "container" } : {}), weight: 0, cost: 0,
-    features: { holds: true }, allows: [{ item: coinOrder().map(k => COIN_ID + k) }], contentsView: "details",
+    features: { holds: true }, allows: [{ item: coinOrder().map(k => COIN_ID + k) }], contentsView: "details", visibility: "gm",
     description: "Where your coins go. Open it to count them, spend or gain some, or move some elsewhere." };
 }
-// Every character has a coin purse.
+// Every character has a coin purse. It's the GM's to see in lists (players open it from the Coins
+// panel), unless the GM has made it visible to everyone.
 function ensurePurse(char) {
-  if (purseEntry(char)) return;
+  const purse = purseEntry(char);
+  if (purse) { if (!purse.item.visibility) purse.item.visibility = "gm"; return; }
   char.items.unshift({ uid: uid(), purse: true, item: purseItem(), qty: 1, equipped: false, states: {}, parent: null, notes: "" });
 }
 
