@@ -91,7 +91,34 @@ def watch_windows(srv):
             return
 
 
+def wait_for_old_version():
+    """Started by the old version (server.update_app, --after-update): wait for it to stop."""
+    deadline = time.time() + 20
+    while time.time() < deadline and any(is_app(port) for port in APP_PORTS):
+        time.sleep(0.3)
+
+
+def tidy_old_version():
+    """The exe an update replaced (ITAMSapp.exe.old) goes, once its process has let go of it."""
+    old = sys.executable + ".old"
+    if not os.path.exists(old):
+        return
+    def tidy():
+        for _ in range(40):  # (the old process may take a moment to let go of its file)
+            try:
+                os.remove(old)
+                return
+            except FileNotFoundError:
+                return
+            except OSError:
+                time.sleep(0.5)
+    threading.Thread(target=tidy, daemon=True).start()
+
+
 def main():
+    if "--after-update" in sys.argv:
+        wait_for_old_version()
+    tidy_old_version()
     # my-data: your own characters, settings and document images, shared by
     # every window or browser tab of the app on this PC.
     server.configure(os.path.join(data_dir(), "party-data"), desktop=True,

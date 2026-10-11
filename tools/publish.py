@@ -44,7 +44,7 @@ def git(*args, capture=False):
     return run("git", *args, capture=capture)
 
 
-def stage():
+def stage(version):
     if not os.path.isdir(os.path.join(STAGE, ".git")):
         run("gh", "repo", "clone", REPO, STAGE, cwd=os.path.dirname(ROOT))
     git("config", "user.name", AUTHOR[0])
@@ -80,6 +80,15 @@ def stage():
             shutil.copy2(src, dst)
     # The public item data: SRD 5.1 only.
     run(sys.executable, os.path.join(ROOT, "tools", "build_srd.py"), "--srd-only", os.path.join(STAGE, "js", "srd-data.js"), cwd=ROOT)
+    # The version the published copy says it is (Settings → Version, and what it checks updates against).
+    app_js = os.path.join(STAGE, "js", "app.js")
+    with open(app_js, encoding="utf8", newline="") as f:
+        text = f.read()
+    marker = 'const APP_VERSION = "dev";'
+    if marker not in text:
+        sys.exit("js/app.js has no APP_VERSION to stamp")
+    with open(app_js, "w", encoding="utf8", newline="") as f:
+        f.write(text.replace(marker, f'const APP_VERSION = "{version.lstrip("v")}";', 1))
 
 
 def check_private():
@@ -115,14 +124,20 @@ def next_version(tags):
     return f"v{major}.{minor + 1}.0"
 
 
-def release(title_extra=None, notes_file=None, version=None):
+def released_tags():
+    out = run("gh", "release", "list", "--repo", REPO, "--json", "tagName", "--jq", ".[].tagName", capture=True, cwd=ROOT)
+    return set(out.splitlines())
+
+
+def latest_tag(tags):
+    """The newest vX.Y.Z released (v0.0.0 before the first)."""
+    vs = [t for t in tags if t.startswith("v") and len(t[1:].split(".")) == 3 and all(x.isdigit() for x in t[1:].split(".")) and int(t[1:].split(".")[0]) < 1000]
+    return max(vs, key=lambda t: tuple(map(int, t[1:].split(".")))) if vs else "v0.0.0"
+
+
+def release(tag, title_extra=None, notes_file=None):
     # Sign with the same key as local builds so phones can update in place.
     shutil.copytree(os.path.join(ROOT, "android", "keystore"), os.path.join(STAGE, "android", "keystore"), dirs_exist_ok=True)
-    tags = set(git("tag", "--list", capture=True).splitlines()) | set(
-        run("gh", "release", "list", "--repo", REPO, "--json", "tagName", "--jq", ".[].tagName", capture=True).splitlines())
-    tag = ("v" + version.lstrip("v")) if version else next_version(tags)
-    if tag in tags:
-        sys.exit(f"{tag} is already released")
     os.environ["MIMIC_VERSION"] = tag  # (the exe's version details)
     run(sys.executable, os.path.join(STAGE, "tools", "build_exe.py"))
     run(sys.executable, os.path.join(STAGE, "tools", "build_apk.py"))
@@ -142,11 +157,20 @@ def main():
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # (messages may have − or …; Windows' console is cp1252)
     args = sys.argv[1:]
     message = args[args.index("-m") + 1] if "-m" in args else f"Update Is This A Mimic(s)? ({datetime.date.today():%Y-%m-%d})"
-    stage()
-    commit_and_push(message)
     opt = lambda name: args[args.index(name) + 1] if name in args else None
+    # The version first: a release's own, else the latest released (a site-only update).
+    tags = released_tags()
     if "--release" in args:
-        release(opt("--title"), opt("--notes"), opt("--version"))
+        version = opt("--version")
+        tag = ("v" + version.lstrip("v")) if version else next_version(tags)
+        if tag in tags:
+            sys.exit(f"{tag} is already released")
+    else:
+        tag = latest_tag(tags)
+    stage(tag)
+    commit_and_push(message)
+    if "--release" in args:
+        release(tag, opt("--title"), opt("--notes"))
 
 
 if __name__ == "__main__":

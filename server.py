@@ -1003,7 +1003,7 @@ class Handler(SimpleHTTPRequestHandler):
     # The apps (Windows and Android) join a party from their own page, on another address, so
     # the party API answers pages from this device or the home network (never public websites).
     # The apps' private endpoints (their saved data, hosting, quitting) never do.
-    APP_ONLY = ("/api/local", "/api/presence", "/api/host", "/api/quit")
+    APP_ONLY = ("/api/local", "/api/presence", "/api/host", "/api/quit", "/api/update")
 
     def cors_origin(self):
         path = urlparse(self.path).path
@@ -1061,7 +1061,7 @@ class Handler(SimpleHTTPRequestHandler):
         try:
             token = self.token()
             # Document images load via <img>, which can't send the player header.
-            open_paths = ("/api/info", "/api/presence", "/api/host", "/api/quit", "/api/open")
+            open_paths = ("/api/info", "/api/presence", "/api/host", "/api/quit", "/api/open", "/api/update")
             if not token and path not in open_paths and not path.startswith(("/api/local", "/api/shops")) \
                     and not (method == "GET" and path.startswith("/api/images/")):
                 raise ApiError(401, "Missing player token")
@@ -1130,6 +1130,8 @@ class Handler(SimpleHTTPRequestHandler):
                     "appPort": app_server.server_address[1] if app_server and self.is_app() else None,
                     "hosting": lan_server is not None, "addresses": lan_addresses(),
                     "port": lan_port if DESKTOP else PORT,
+                    # The installed Windows app can update itself (see update_app); run from source, it can't.
+                    "selfUpdate": DESKTOP and bool(getattr(sys, "frozen", False)) and self.is_app(),
                     "defaultPort": lan_port or DEFAULT_LAN_PORT}
         if parts[:1] == ["shops"]:
             return self.shops_api(method, parts[1:], token)
@@ -1149,7 +1151,7 @@ class Handler(SimpleHTTPRequestHandler):
             if not (self.is_app() and LOCAL_DIR):
                 raise ApiError(403, "Only the app on this PC can do that")
             return self.local_api(method, parts[1:])
-        if parts[:1] in (["presence"], ["host"], ["quit"], ["open"]):
+        if parts[:1] in (["presence"], ["host"], ["quit"], ["open"], ["update"]):
             if not self.is_app():
                 raise ApiError(403, "Only the desktop app can do that")
             if method == "GET" and parts == ["presence"]:
@@ -1170,6 +1172,10 @@ class Handler(SimpleHTTPRequestHandler):
             if method == "POST" and parts == ["quit"]:
                 threading.Thread(target=shutdown_all, daemon=True).start()
                 return {"ok": True}
+            if method == "POST" and parts == ["update"]:
+                version = update_app()
+                threading.Timer(1.0, shutdown_all).start()  # (after the reply): the new one starts as this one stops
+                return {"ok": True, "version": version}
             if method == "POST" and parts == ["open"]:
                 # A link to the web (the user guide, credits) in the PC's default browser: the app's
                 # own window is an Edge app window, which would open it in another one of those.
@@ -1960,6 +1966,71 @@ class Handler(SimpleHTTPRequestHandler):
             with cond:
                 presence["count"] -= 1
                 presence["changed"] = time.time()
+
+
+# ------------------------------------------------------------------ updating the Windows app
+
+RELEASES_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest"
+UPDATE_ASSET = "ITAMSapp.exe"
+UPDATE_MAX_BYTES = 200 * 1024 * 1024
+
+
+def update_app():
+    """Replace the running exe with the latest release's, checked against GitHub's SHA-256 of it,
+    and start the new one (it waits for this one to stop: see desktop.py). Returns its version."""
+    import subprocess
+    import urllib.request
+    if not getattr(sys, "frozen", False):
+        raise ApiError(400, "Only the installed app can update itself: download the new version instead")
+    headers = {"User-Agent": "ITAMSapp-updater", "Accept": "application/vnd.github+json"}
+    try:
+        with urllib.request.urlopen(urllib.request.Request(RELEASES_API, headers=headers), timeout=20) as r:
+            release = json.load(r)
+    except Exception:
+        raise ApiError(502, "Couldn't reach GitHub to find the latest version")
+    asset = next((a for a in release.get("assets", []) if a.get("name") == UPDATE_ASSET), None)
+    digest = str((asset or {}).get("digest") or "")
+    if not asset or not digest.startswith("sha256:"):
+        raise ApiError(502, "The latest release has no Windows app to install")
+    exe = sys.executable
+    new, old = exe + ".new", exe + ".old"
+    sha = hashlib.sha256()
+    try:
+        with urllib.request.urlopen(urllib.request.Request(asset["browser_download_url"], headers={"User-Agent": headers["User-Agent"]}), timeout=60) as r,                 open(new, "wb") as f:
+            size = 0
+            while chunk := r.read(1 << 16):
+                size += len(chunk)
+                if size > UPDATE_MAX_BYTES:
+                    raise ValueError("too big")
+                sha.update(chunk)
+                f.write(chunk)
+    except Exception:
+        _remove(new)
+        raise ApiError(502, "The download didn't finish: nothing was changed")
+    if sha.hexdigest() != digest.split(":", 1)[1].lower():
+        _remove(new)
+        raise ApiError(502, "The download didn't match GitHub's checksum: nothing was changed")
+    # A running exe can be renamed (not overwritten): this one becomes .old (deleted by the next start).
+    _remove(old)
+    os.replace(exe, old)
+    try:
+        os.replace(new, exe)
+    except OSError:
+        os.replace(old, exe)
+        _remove(new)
+        raise ApiError(500, "Couldn't put the new version in place: nothing was changed")
+    # PYINSTALLER_RESET_ENVIRONMENT: the new exe unpacks itself afresh, not into this one's folder.
+    env = {**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"}
+    flags = getattr(subprocess, "DETACHED_PROCESS", 0) | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+    subprocess.Popen([exe, "--after-update"], env=env, creationflags=flags, close_fds=True, cwd=os.path.dirname(exe))
+    return str(release.get("tag_name") or "")
+
+
+def _remove(path):
+    try:
+        os.remove(path)
+    except OSError:
+        pass
 
 
 def shutdown_all():

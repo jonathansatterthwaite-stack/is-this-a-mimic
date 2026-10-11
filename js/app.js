@@ -4360,6 +4360,90 @@ function importFile(file) {
 // The user guide: the GitHub project's wiki.
 const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/wiki";
 
+// ------------------------------------------------------------------ updates
+// The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
+const APP_VERSION = "1.0.4";
+const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
+const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
+const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);
+const newerVersion = (a, b) => { // is a newer than b?
+  const x = versionParts(a), y = versionParts(b);
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) > (y[i] || 0);
+  return false;
+};
+// What this copy is, for updating: the Windows app (installs it), the Android app (downloads the
+// APK, which Android installs over this one), the web app (reloads), or a copy that can't update
+// itself (run from source, or a player's browser using the host's copy).
+function updateKind() {
+  if (party.isApp()) return party.app?.android ? "android" : party.app?.selfUpdate ? "windows" : "other";
+  return /\.github\.io$/.test(location.hostname) ? "web" : "other";
+}
+const updateCheck = { busy: false, latest: null, error: null }; // (only when asked: the app stays offline otherwise)
+
+async function checkForUpdate() {
+  Object.assign(updateCheck, { busy: true, error: null });
+  render();
+  try {
+    const res = await fetch(LATEST_API, { cache: "no-store", headers: { Accept: "application/vnd.github+json" } });
+    if (!res.ok) throw new Error(res.statusText);
+    const r = await res.json();
+    const asset = name => (r.assets || []).find(a => a.name === name)?.browser_download_url || null;
+    updateCheck.latest = { version: String(r.tag_name || "").replace(/^v/, ""), url: r.html_url || RELEASES_URL, apk: asset("ITAMSapp.apk"), exe: asset("ITAMSapp.exe") };
+  } catch {
+    updateCheck.error = "Couldn't reach GitHub: check the connection and try again.";
+  }
+  updateCheck.busy = false;
+  render();
+}
+
+async function installUpdate() {
+  if (party.isHosting() && party.others().some(c => c.online) &&
+      !confirm("Players are connected. Updating restarts the app and stops the party for everyone. Update anyway?")) return;
+  Object.assign(updateCheck, { busy: true, error: null });
+  render();
+  try {
+    const res = await fetch("api/update", { method: "POST", cache: "no-store" });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    ui.leaving = true;
+    document.body.replaceChildren(h("div", { class: "empty" }, h("h2", null, `Updating to version ${String(data.version || "").replace(/^v/, "")}`),
+      h("p", null, "The new version opens in a new window in a moment. You can close this one.")));
+    setTimeout(() => window.close(), 4000);
+  } catch (e) {
+    Object.assign(updateCheck, { busy: false, error: e.message || "The update didn't work: nothing was changed." });
+    render();
+  }
+}
+
+// Settings: this copy's version, and Check for updates (then the way to update, for this device).
+function updateCard() {
+  const kind = updateKind(), latest = updateCheck.latest, dev = APP_VERSION === "dev";
+  const newer = latest && (dev || newerVersion(latest.version, APP_VERSION));
+  // How this copy updates (the release must have its file).
+  const how = !newer ? null : kind === "windows" && !dev && latest.exe ? "install" : kind === "android" && latest.apk ? "apk" : kind === "web" ? "reload" : "link";
+  const action = how === "install" ? h("button", { class: "btn primary", disabled: updateCheck.busy, onclick: installUpdate }, icon("download"), "Install and restart")
+    : how === "apk" ? h("a", { class: "btn primary", href: latest.apk }, icon("download"), "Download it")
+    : how === "reload" ? h("button", { class: "btn primary", onclick: () => location.reload() }, icon("download"), "Reload")
+    : how === "link" ? h("a", { class: "btn", href: latest.url, target: "_blank", rel: "noopener" }, "Open the downloads") : null;
+  const note = how === "install" ? "Downloads it from GitHub, checks it, and restarts the app with it. Your data stays as it is."
+    : how === "apk" ? "Android asks to install it over this one. Your data stays as it is."
+    : how === "reload" ? "Loads the newest version of the web app."
+    : how !== "link" ? null
+    : kind === "windows" || kind === "android" ? "Download it from there: your data stays as it is."
+    : party.isApp() ? "This copy runs from its source: update it from there." : "This copy comes from the party's host: the host updates it.";
+  return h("section", { class: "settings-card help-link update-card" },
+    icon("download"),
+    h("div", null, h("b", null, dev ? "Version: a development copy" : `Version ${APP_VERSION}`),
+      h("p", { class: "muted small" },
+        updateCheck.busy ? "Checking…"
+        : updateCheck.error ? updateCheck.error
+        : !latest ? "Check GitHub for a newer version."
+        : newer ? [`Version ${latest.version} is out. `, h("a", { href: latest.url, target: "_blank", rel: "noopener" }, "What's new"), note && ". " + note]
+        : "You have the latest version.")),
+    h("div", { class: "inline wrap" }, action,
+      h("button", { class: "btn", disabled: updateCheck.busy, onclick: checkForUpdate }, latest ? "Check again" : "Check for updates")));
+}
+
 // Settings → This device: this device's own settings (mode, role, animations), joining or hosting a
 // party, and the guide. A campaign's rules and characters are on its card in Campaigns; backups and
 // erasing everything in Files.
@@ -4429,7 +4513,7 @@ function renderSettings() {
       h("p", { class: "muted small" }, "How everything works, with pictures: containers, sets, drawn icons, parties, shops and values.")),
     h("a", { class: "btn", href: GUIDE_URL, target: "_blank", rel: "noopener" }, "Open the guide"));
   // Two columns on a wide page: this device's settings, then the party and the guide.
-  return h("div", { class: "view-settings" }, pageColumns([modeBox, roleBox, animBox, soundsBox], [partySettings(), guide]),
+  return h("div", { class: "view-settings" }, pageColumns([modeBox, roleBox, animBox, soundsBox], [partySettings(), guide, updateCard()]),
     h("section", { class: "credits muted small" },
       h("p", null, "Includes material from the System Reference Document 5.1 by Wizards of the Coast LLC, licensed under ",
         h("a", { href: "https://creativecommons.org/licenses/by/4.0/legalcode", target: "_blank", rel: "noopener" }, "CC BY 4.0"), "."),
