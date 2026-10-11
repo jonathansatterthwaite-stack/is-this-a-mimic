@@ -390,6 +390,18 @@ function shapeSelect(prefs, key, onChange) {
   } }, ICON_SHAPES.map(([k, l]) => h("option", { value: k, selected: k === cur }, l)));
 }
 
+// Tiles: smaller or larger than they start (each list its own). Names and details grow with them.
+const TILE_SIZES = [["small", "Small tiles", 0.8], ["medium", "Medium tiles", 1], ["large", "Large tiles", 1.35], ["xl", "Extra large tiles", 1.8]];
+const tileScale = prefs => (TILE_SIZES.find(([k]) => k === prefs?.tileSize) || TILE_SIZES[1])[2];
+function tileSizeSelect(prefs, key, onChange) {
+  const cur = TILE_SIZES.some(([k]) => k === prefs.tileSize) ? prefs.tileSize : "medium";
+  return h("select", { class: "tile-size-select", "aria-label": "Tile size", onchange: e => {
+    prefs.tileSize = e.target.value;
+    writePref(`mimic-tile-size-${key}`, prefs.tileSize);
+    onChange();
+  } }, TILE_SIZES.map(([k, l]) => h("option", { value: k, selected: k === cur }, l)));
+}
+
 // The view menu's Show: a toggle for each part of a row (or tile), for the layout showing.
 function displayToggles(st, prefs, key, onChange) {
   const layout = prefs.layout === "tiles" ? "tiles" : "list";
@@ -405,10 +417,17 @@ function displayToggles(st, prefs, key, onChange) {
   ];
 }
 
-// A grid of tiles; names shrink to fit.
+// A grid of tiles; names shrink to fit. Its list's grids share one tile size (tileGroup).
+const tileGroups = new WeakMap();
+let tileGroupCount = 0;
 function tilesBox(extraClass = "", prefs = viewPrefs()) {
   const cls = ["tiles", "detail-minimal", extraClass];
   const box = h("div", { class: cls.filter(Boolean).join(" ") });
+  const scale = tileScale(prefs);
+  if (!tileGroups.has(prefs)) tileGroups.set(prefs, String(++tileGroupCount));
+  box.dataset.tileGroup = tileGroups.get(prefs);
+  box.dataset.tileScale = scale;
+  box.style.setProperty("--tile-text", scale > 1 ? 1 + (scale - 1) * 0.6 : 0.5 + scale / 2);
   tileResizer()?.observe(box);
   return box;
 }
@@ -432,20 +451,26 @@ function tileResizer() {
   return tileObserver;
 }
 
-// One tile size for the whole view, set by its widest grid, so tiles in narrower grids (strapped
-// outside, nested containers) are the same size, just fewer to a row. Then names are refitted.
+// One tile size for each list, set by its widest grid, so tiles in narrower grids (strapped
+// outside, nested containers) are the same size, just fewer to a row (and centred). The list's
+// Tile size scales the smallest a tile can be. Then names are refitted.
 const TILE_MIN = 66, TILE_MIN_ROOMY = 104, TILE_GAP = 6;
 function syncTileSize(root = document.getElementById("view")) {
   if (!root) return;
   const boxes = [...root.querySelectorAll(".tiles")].filter(b => b.offsetParent);
-  const min = boxes.some(b => b.classList.contains("roomy")) ? TILE_MIN_ROOMY : TILE_MIN;
-  const width = Math.max(0, ...boxes.map(b => {
-    const cs = getComputedStyle(b);
-    return b.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
-  }));
-  if (width > 0) {
+  const groups = new Map();
+  for (const b of boxes) groups.set(b.dataset.tileGroup || "", [...(groups.get(b.dataset.tileGroup || "") || []), b]);
+  for (const group of groups.values()) {
+    const scale = Math.max(...group.map(b => +b.dataset.tileScale || 1));
+    const min = (group.some(b => b.classList.contains("roomy")) ? TILE_MIN_ROOMY : TILE_MIN) * scale;
+    const width = Math.max(0, ...group.map(b => {
+      const cs = getComputedStyle(b);
+      return b.clientWidth - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight);
+    }));
+    if (width <= 0) continue;
     const n = Math.max(1, Math.floor((width + TILE_GAP) / (min + TILE_GAP)));
-    root.style.setProperty("--tile-size", Math.floor((width - (n - 1) * TILE_GAP) / n * 100) / 100 + "px");
+    const size = Math.floor(Math.min(width, (width - (n - 1) * TILE_GAP) / n) * 100) / 100 + "px";
+    for (const b of group) b.style.setProperty("--tile-size", size);
   }
   boxes.forEach(fitTileNames);
 }
@@ -912,6 +937,7 @@ function listPrefs(key) {
     layout: readPref(`mimic-layout-${key}`, "list"),
     show: loadShowPrefs(key),
     shape: readPref(`mimic-icon-shape-${key}`, "square"),
+    tileSize: readPref(`mimic-tile-size-${key}`, "medium"),
   };
 }
 
@@ -1020,7 +1046,7 @@ function itemManager(o) {
       chips && sect("Filter", chips),
       parts.sort && sect("Sort by", sortControl(state, prefsKey === o.key ? o.key : prefsKey, sorts, refresh)),
       parts.layout && sect("Layout", h("div", { class: "layout-row" }, layoutToggle(prefs, prefsKey, refresh),
-        prefs.layout !== "tiles" && shapeSelect(prefs, prefsKey, refresh))),
+        prefs.layout === "tiles" ? tileSizeSelect(prefs, prefsKey, refresh) : shapeSelect(prefs, prefsKey, refresh))),
       parts.layout && sect(prefs.layout === "tiles" ? "Show on tiles" : "Show on rows", displayToggles(st, prefs, prefsKey, refresh)),
       parts.search && sect("Search tips",
         h("div", { class: "search-tips" }, Object.entries(SEARCH_KEYS).map(([k, d]) => tip(k, d)),
@@ -1648,10 +1674,11 @@ function slotConflict(char, e, slot) {
   { footer: [h("button", { class: "btn", onclick: () => close() }, "Cancel")] });
 }
 
-// The system's slots and what's in them: a line above the inventory, and its window.
+// The system's slots and what's in them: a line above the inventory (unless one of its panels
+// shows them), and its window.
 function slotsBar(char) {
   const slots = systemSlots();
-  if (!slots.length || !char) return null;
+  if (!slots.length || !char || panelShows("slots")) return null;
   return h("button", { type: "button", class: "slots-bar", title: "What's equipped where", onclick: () => openSlots() },
     icon("shield"), slots.map(s => { const n = slotUsed(char, s.key); return h("span", { class: "slot-chip" + (n >= s.count ? " full" : "") }, `${s.label} ${n}/${s.count}`); }));
 }
@@ -2045,15 +2072,20 @@ const locationValue = (e, char = store.char()) => { const k = compartmentOf(char
 // An inventory item's details, while they're open: redrawn as soon as its states change (the
 // player ticking Attuned, a trigger cursing it, the GM identifying it), so locks and layers
 // apply straight away.
-let entryDetailsOpen = null;
+// Every item details window still open, newest last: one opened from another's contents (a coin
+// in the purse) leaves the one under it open, and both keep up with changes.
+let entryDetailsShown = [];
+const openEntryDetails = () => (entryDetailsShown = entryDetailsShown.filter(d => document.contains(d.panel)));
+const topEntryDetails = () => openEntryDetails().at(-1) || null;
 function refreshEntryDetails() {
-  const d = entryDetailsOpen;
-  if (!d || !document.contains(d.panel)) { entryDetailsOpen = null; return; }
-  const c = store.char(), x = c?.items.find(i => i.uid === d.uid);
-  if (x && JSON.stringify(entryStates(c, x)) !== d.states) return d.reopen();
-  // What's in it, and the coin purse's totals, as they are now.
-  d.panel.querySelector(".entry-contents .item-manager")?.redraw?.();
-  d.panel.querySelector(".purse-tools")?.redraw?.();
+  const c = store.char();
+  for (const d of openEntryDetails()) {
+    const x = c?.items.find(i => i.uid === d.uid);
+    if (x && JSON.stringify(entryStates(c, x)) !== d.states) { d.reopen(); continue; }
+    // What's in it, and the coin purse's totals, as they are now.
+    d.panel.querySelector(".entry-contents .item-manager")?.redraw?.();
+    d.panel.querySelector(".purse-tools")?.redraw?.();
+  }
 }
 
 function openEntry(entryUid, opts = {}) {
@@ -2162,7 +2194,7 @@ function openEntry(entryUid, opts = {}) {
     const iconOnly = panel?.classList.contains("icon-focus");
     const docked = panel?.classList.contains("docked");
     close(); openEntry(entryUid, docked ? {} : { window: true });
-    if (iconOnly) entryDetailsOpen?.panel.querySelector(".icon-focus-switch input")?.click();
+    if (iconOnly) topEntryDetails()?.panel.querySelector(".icon-focus-switch input")?.click();
   };
   // Live drawings read this copy's values as they are now (it may have changed, or been
   // replaced by a party update, since the dialog opened).
@@ -2184,7 +2216,7 @@ function openEntry(entryUid, opts = {}) {
   panel = close.panel;
   if (interactive) makeIconInteractive(panel, it.iconDoc, entryUid, touch, artVars);
   if (opts.use) panel.querySelector(".icon-focus-switch input")?.click(); // Use: straight to the picture
-  entryDetailsOpen = { uid: entryUid, states: JSON.stringify(entryStates(char, e)), panel, reopen };
+  openEntryDetails().push({ uid: entryUid, states: JSON.stringify(entryStates(char, e)), panel, reopen });
 }
 
 const LIQUIDS = ["Water", "Wine", "Ale", "Beer", "Mead", "Cider", "Milk", "Juice", "Tea", "Brandy", "Rum", "Whiskey",
@@ -2661,7 +2693,7 @@ function containerContents(holder) {
   const char = store.char();
   const hidden = char.items.filter(x => x.parent === holder.uid && spaceView(holder, compartmentOf(char, x)) === "sealed" && !isGmDevice());
   const name = entryName(holder), spec = holderSpec(holder);
-  if (entryDetailsOpen?.uid !== holder.uid) resetList("contents"); // (a new container: no search carried over)
+  if (topEntryDetails()?.uid !== holder.uid) resetList("contents"); // (a new container: no search carried over)
   const storage = () => {
     const c = store.char(), hd = c?.items.find(x => x.uid === holder.uid);
     const st = charStorage(contentsChar(c, hd || holder));

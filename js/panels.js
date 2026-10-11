@@ -1,14 +1,15 @@
-// Panels: screens a game system brings with it (D&D 5e: Character and Combat above the inventory,
+// Panels: screens a game system brings with it (D&D 5e: Character and Equipment above the inventory,
 // and the summary on the GM's player cards). A system package lists them:
 //
-//   panels: [{ id, slot: "inventory" | "gm-player", title, html }],  panelLib: "script for every panel"
+//   panels: [{ id, slot: "inventory" | "gm-player", title, html, shows }],  panelLib: "script for every panel"
+//   shows: what the panel shows in place of the app's own: ["slots"] (the equipment slots line)
 //
 // A panel is someone else's code, so it runs in a sandboxed frame: scripts only, no access to Pack
-// Rat's page, storage or party, and a Content-Security-Policy that blocks the network. It talks to
+// the app's page, storage or party, and a Content-Security-Policy that blocks the network. It talks to
 // the app by messages, through the Mimic object it's given (panelHelper below):
 //
-//   Mimic.on("state", s => …)       the character (stats, coins, items with their features…), sent
-//                                      again whenever anything changes
+//   Mimic.on("state", s => …)       the character (stats, coins, items with their features, the
+//                                      equipment slots and what's in them…), sent again whenever anything changes
 //   Mimic.request(action, args)     ask for a change; the app checks it first (PANEL_REQUESTS: setStat,
 //                                      equip, setState, setValue, changeQty, openItem, openCoins)
 //   Mimic.summary(parts)            what the panel's header shows (closed: only the parts marked closed)
@@ -146,9 +147,15 @@ function panelState(char, withIcons = true) {
   // Each limited state: how many are on, and the limit (5e: attunement slots).
   const limits = Object.fromEntries(systemStates().filter(st => st.limit).map(st => [st.key,
     { count: items.filter(x => x.states[st.key]).length, limit: stateLimit(char, st) }]));
+  // The equipment slots: how many places, how many taken, and by what (item uids, and how many places each).
+  const slots = systemSlots().map(s => {
+    const holders = slotHolders(char, s.key);
+    return { key: s.key, label: s.label, count: s.count, used: holders.reduce((n, x) => n + x.slot.size, 0),
+      items: holders.map(x => ({ uid: x.e.uid, size: x.slot.size })) };
+  });
   const g = valueSet();
   return {
-    system: activeSystem().id, settings: clone(settings), limits,
+    system: activeSystem().id, settings: clone(settings), limits, slots,
     // Global values, and the character's Locals (an item's own are on the item).
     values: { global: ownValues(g.party), local: ownValues(g.characters?.[char.id]) },
     character: { id: char.id, name: char.name, stats: statsOf(char), coins: { ...(char.coins || {}) } },

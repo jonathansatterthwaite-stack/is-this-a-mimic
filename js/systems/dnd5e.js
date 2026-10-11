@@ -88,7 +88,7 @@ const DND5E_SYSTEM = {
       limit: { value: "attuneSlots", default: 3, mode: "warn", text: "You can attune to at most {limit} items", label: "Attunement slots" } },
     { key: "identified", label: "Identified", who: "gm" },
     { key: "cursed", label: "Cursed", who: "gm" },
-    // A versatile weapon held in both hands: its bigger damage (the Combat panel), both hands (slots).
+    // A versatile weapon held in both hands: its bigger damage (the Equipment panel), both hands (slots).
     { key: "twoHanded", label: "Two-handed", who: "player", requires: "weapon", requiresProperty: "Versatile" },
   ],
   // Where equipped things go (see systemSlots): weapons and shields in the hands, armor on the body.
@@ -110,7 +110,7 @@ const DND5E_SYSTEM = {
     { key: "worn", label: "Armor bonus", hint: "Adds to Armor Class while worn.", fields: [
       { key: "acBonus", label: "AC bonus while worn", kind: "number" },
     ] },
-    { key: "weapon", label: "Weapon", equip: "wielded", hint: "Used to attack: its damage, properties and reach or range show in the Combat panel.", fields: [
+    { key: "weapon", label: "Weapon", equip: "wielded", hint: "Used to attack: its damage, properties and reach or range show in the Equipment panel.", fields: [
       { key: "kind", label: "Melee or ranged", kind: "select", options: ["Melee", "Ranged"], segmented: true },
       { key: "damage", label: "Damage dice", kind: "dice", placeholder: "1d8" },
       { key: "damageType", label: "Damage type", kind: "select", options: ["", ...DAMAGE_TYPES] },
@@ -127,7 +127,7 @@ const DND5E_SYSTEM = {
       { key: "stealthDisadvantage", label: "Stealth disadvantage", kind: "checkbox" },
       { key: "bonus", label: "Magic bonus (+N)", kind: "number" },
     ] },
-    { key: "ammunition", label: "Ammunition", hint: "Fired by a weapon: shows with it in the Combat panel, and goes in quivers and cases.", fields: [
+    { key: "ammunition", label: "Ammunition", hint: "Fired by a weapon: shows with it in the Equipment panel, and goes in quivers and cases.", fields: [
       { key: "bonus", label: "Magic bonus (+N)", kind: "number" },
     ] },
   ],
@@ -162,7 +162,7 @@ const DND5E_SYSTEM = {
       defaults: { category: "Wondrous Item", attunement: true } },
   ],
 
-  // Panels (js/systems/dnd5e-panels.js): Character and Combat above the inventory, the GM's
+  // Panels (js/systems/dnd5e-panels.js): Character and Equipment above the inventory, the GM's
   // player summaries; the rules they share; and the character stats they use, with starting values.
   get panels() { return DND5E_PANELS.panels; },
   get panelLib() { return DND5E_PANELS.lib; },

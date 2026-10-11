@@ -165,9 +165,24 @@ function dnd5eCharacterPanel() {
 }
 
 // Combat: the equipped weapons ready to use, with to-hit, damage, range and ammunition.
-function dnd5eCombatPanel() {
+// The Equipment panel: the equipment slots and what's in them, then the attacks.
+function dnd5eEquipmentPanel() {
   const { h, icon, markup, request, fmtMod } = Mimic;
   const root = document.getElementById("root");
+
+  // Each slot: how full it is, and what's in it (tap a name for its details).
+  const slotsBox = state => {
+    const byUid = Object.fromEntries(state.items.map(x => [x.uid, x]));
+    return h("div", { class: "equip-slots" }, state.slots.map(s => {
+      const held = s.items.map(si => ({ ...si, x: byUid[si.uid] })).filter(si => si.x);
+      return h("div", { class: "equip-slot" + (s.used > s.count ? " over" : s.used >= s.count ? " full" : "") },
+        h("div", { class: "equip-slot-head" }, h("b", null, s.label), h("span", { class: "equip-slot-count" }, s.used + " / " + s.count)),
+        held.length ? held.map(si => h("button", { class: "equip-item", type: "button", title: "Details", onclick: () => request("openItem", { uid: si.uid }) },
+          si.x.icon ? markup(si.x.icon, "equip-icon") : h("span", { class: "equip-icon" }), h("span", { class: "equip-name" }, si.x.name),
+          si.size > 1 && h("span", { class: "muted small" }, "×" + si.size)))
+          : h("div", { class: "muted small equip-empty" }, "Empty"));
+    }));
+  };
 
   // Weapon properties as chips, each with its rule as a tooltip.
   const propertyChips = props => props.map(p => {
@@ -230,6 +245,7 @@ function dnd5eCombatPanel() {
     const profs = st.weaponProfs || ["Simple", "Martial"];
     const setProf = (cat, on) => request("setStat", { key: "weaponProfs", value: on ? [...new Set([...profs, cat])] : profs.filter(p => p !== cat) });
     Mimic.render(root,
+      state.slots.length > 0 && slotsBox(state),
       h("div", { class: "combat-settings" },
         h("label", { class: "prof-field" }, "Proficiency bonus",
           h("input", { type: "number", inputmode: "numeric", min: 0, max: 10, value: st.prof ?? 2, "aria-label": "Proficiency bonus",
@@ -243,8 +259,11 @@ function dnd5eCombatPanel() {
       others.length > 0 && h("div", { class: "combat-others muted small" }, "Also carried: ",
         others.map((x, i) => [i > 0 && ", ", h("button", { class: "link", type: "button", title: "Equip", onclick: () => request("equip", { uid: x.uid, on: true }) },
           x.name + (x.qty > 1 ? " ×" + x.qty : ""))])));
-    Mimic.summary([{ text: ready.length ? ready.map(x => x.name).join(", ")
-      : weapons.length ? weapons.length + " weapon" + (weapons.length === 1 ? "" : "s") + ", none equipped" : "Unarmed" }]);
+    Mimic.summary([
+      state.slots.length > 0 && { icon: "shield", text: state.slots.map(s => s.label + " " + s.used + "/" + s.count).join(" · "),
+        warn: state.slots.some(s => s.used > s.count), title: "Equipment slots" },
+      { text: ready.length ? ready.map(x => x.name).join(", ")
+        : weapons.length ? weapons.length + " weapon" + (weapons.length === 1 ? "" : "s") + ", none equipped" : "Unarmed" }]);
   });
 }
 
@@ -280,7 +299,7 @@ const DND5E_PANELS = {
   lib: "(" + dnd5eRules + ")();",
   panels: [
     { id: "character", slot: "inventory", title: "Character", html: panelPage(dnd5eCharacterPanel, ".stats { padding: 10px; } .stat { box-shadow: none; }") },
-    { id: "combat", slot: "inventory", title: "Combat", html: panelPage(dnd5eCombatPanel) },
+    { id: "equipment", slot: "inventory", title: "Equipment", html: panelPage(dnd5eEquipmentPanel), shows: ["slots"] },
     { id: "gm-player", slot: "gm-player", title: "Player summary", html: panelPage(dnd5eGmPlayerPanel) },
   ],
 };

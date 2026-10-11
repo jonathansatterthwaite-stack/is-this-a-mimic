@@ -208,6 +208,9 @@ const itemHasProperty = (it, p) => (it?.properties || []).some(x => String(x).to
 // contents, see ruleMatches; a rule's `state` must be on too), taking `size` of it (a greatsword
 // both hands; a versatile one both while it's Two-handed). An item can say its own: slot (a key,
 // or "none") and slotSize. A system without slots: anything can be equipped, as before.
+// What a panel can show in place of the app's own (see js/panels.js).
+const PANEL_SHOWS = ["slots"];
+const panelShows = what => (activeSystem().panels || []).some(p => p.slot === "inventory" && p.shows?.includes(what));
 const systemSlots = () => Array.isArray(activeSystem().slots) ? activeSystem().slots : [];
 function slotFor(char, e, states = null) {
   const it = currentItem(e, char);
@@ -386,7 +389,8 @@ function cleanSystem(raw) {
       .map(f => ({ ...f, fields: Array.isArray(f.fields) ? f.fields : [] })),
     starterTemplates: Array.isArray(raw.starterTemplates) ? raw.starterTemplates : [],
     panels: (Array.isArray(raw.panels) ? raw.panels : []).filter(p => p && typeof p.id === "string" && typeof p.html === "string"
-      && ["inventory", "gm-player"].includes(p.slot)).map(p => ({ id: p.id, slot: p.slot, title: String(p.title || p.id), html: p.html })),
+      && ["inventory", "gm-player"].includes(p.slot)).map(p => ({ id: p.id, slot: p.slot, title: String(p.title || p.id), html: p.html,
+        ...(Array.isArray(p.shows) ? { shows: p.shows.filter(x => PANEL_SHOWS.includes(x)) } : {}) })),
     panelLib: typeof raw.panelLib === "string" ? raw.panelLib : "",
     stats: raw.stats && typeof raw.stats === "object" && !Array.isArray(raw.stats) ? raw.stats : {},
     campaignSettings: Array.isArray(raw.campaignSettings) ? raw.campaignSettings.filter(k => typeof k === "string") : [],
