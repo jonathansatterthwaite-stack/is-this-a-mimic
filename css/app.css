@@ -331,10 +331,10 @@ svg.drawn-icon * { pointer-events: none; }
 /* Sub-tabs at the top of a screen (Catalog: Items, My items…; Settings: Settings, Campaigns, Files) */
 .seg.sub-tabs { display: flex; width: fit-content; max-width: 100%; overflow-x: auto; margin-bottom: 14px; }
 .seg.sub-tabs button { width: auto; padding: 0 16px; white-space: nowrap; font-weight: 600; flex: none; }
-.gm-values .gm-level, .cw .gm-level { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.gm-values .gm-level { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .gm-var .collapse { flex: none; }
 .gm-var .group-head h3 { flex: 1; text-align: left; }
-.gm-values .gm-level .row-main, .cw .gm-level .row-main { flex: 1 1 160px; min-width: 0; }
+.gm-values .gm-level .row-main { flex: 1 1 160px; min-width: 0; }
 .gm-values { margin-bottom: 18px; }
 /* A value's row in a card (the Values tab's card grid): narrow, its name and line take the first
    line, and its controls (slider, number, clear, clock) a line of their own. */
@@ -383,6 +383,14 @@ svg.drawn-icon * { pointer-events: none; }
 .cp-type-board { padding: 6px; }
 .cp-type-board .gm-board-fit { flex: 1 1 0; min-height: 0; }
 .cp-inert .cp-expand { display: none; }
+/* Following values (Shown when, Locked when): hidden ones faded in Edit mode; locked ones can't be used. */
+.cp-cell.cp-hidden, .cp-card.cp-hidden { opacity: .5; outline: 1px dashed var(--border); outline-offset: -1px; }
+.cp-cell.cp-locked > :not(.cp-flag):not(.cp-handle):not(.cp-grip):not(.cp-edit) { filter: grayscale(.8); opacity: .65; }
+.cp-flag { position: absolute; top: 5px; left: 7px; z-index: 2; display: inline-flex; padding: 2px; border-radius: 6px; background: var(--surface); color: var(--muted); box-shadow: 0 0 0 1px var(--border); pointer-events: auto; }
+.cp-flag .icon { width: 14px; height: 14px; }
+.cp-touch { touch-action: none; cursor: pointer; }
+.cp-cond .rblk-line { flex-wrap: wrap; }
+.cp-rules { display: flex; flex-direction: column; gap: 6px; }
 .cp-expand { position: absolute; top: 4px; right: 4px; width: 30px; height: 30px; background: var(--surface); z-index: 3; }
 /* Tabs on a panel's grid: page tabs (text) and section tabs (icons) */
 .cp-type-tabs { padding: 0; border-left-width: 1px; background: none; border-style: dashed; }
@@ -480,7 +488,7 @@ svg.drawn-icon * { pointer-events: none; }
 .row:has(.settle-row) { flex-wrap: wrap; }
 .row .check.trade-pick, .row .check { white-space: nowrap; }
 input.trade-n { width: 64px; flex: none; }
-.view-gm .gm-values h3, .view-gm .cw h3 { margin: 14px 0 6px; }
+.view-gm .gm-values h3 { margin: 14px 0 6px; }
 .view-gm .card-grid .group-head h3 { margin: 0; } /* cards (Values, Connections): headings sit in their heads */
 .gm-values-intro { margin: 0 0 12px; }
 /* The view menu (itemManager): filters, sort and display options in a panel over the list, from
@@ -583,16 +591,6 @@ input.settle-n { width: 70px; flex: none; }
 /* Clockwork (js/clockwork-ui.js): the GM's cog beside connected items, and the Clockwork tab. */
 .icon-btn.cw-cog { color: var(--muted); flex: none; }
 .icon-btn.cw-cog:hover { color: var(--accent); }
-.cw-char-name { margin: 16px 0 8px; display: flex; align-items: center; gap: 8px; }
-.cw-item .group-head { gap: 10px; }
-.cw-item .group-head h3 { flex: 1; text-align: left; margin: 0; }
-.cw-item.focus { box-shadow: 0 0 0 2px var(--accent); }
-.cw-body { padding: 4px 12px 12px; display: grid; gap: 6px; }
-.cw-line { display: grid; grid-template-columns: 90px 1fr; gap: 8px; align-items: baseline; }
-.cw-what { display: flex; flex-wrap: wrap; gap: 4px 6px; min-width: 0; }
-.cw-rules { margin: 0; padding-left: 18px; display: grid; gap: 2px; width: 100%; }
-.cw-what .chip { cursor: default; }
-@media (max-width: 520px) { .cw-line { grid-template-columns: 1fr; gap: 2px; } }
 .gm-player > .gm-level { padding-left: 14px; background: color-mix(in srgb, var(--surface-2) 45%, transparent); }
 .gm-item { padding-left: 46px !important; }
 .gm-control { display: flex; align-items: center; gap: 8px; flex: 1 1 240px; max-width: 360px; }
@@ -1695,3 +1693,65 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
   .shaped-rows > .row .row-weight, .shaped-rows > .row .row-cost, .shaped-rows > .row .row-sub { display: none; }
   .shaped-rows > .row .row-title { max-width: none; }
 }
+
+/* The flow map (GM → Controls → Connections: js/flow-map.js). Phone first: the list, then one
+   thing's map stacked (changed by, this, changes); wide (.fm-wide): the list beside the map, its
+   columns joined by curves with their labels on them. */
+.fm-k-value { --fmk: var(--rule-if); } .fm-k-control { --fmk: var(--rule-when); } .fm-k-item { --fmk: var(--rule-do); }
+.fm-k-char { --fmk: var(--rule-scope); } .fm-k-shop { --fmk: var(--accent); } .fm-k-hand { --fmk: var(--muted); }
+.fm-bar { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 8px 0; }
+.fm-search { flex: 1 1 200px; min-width: 0; }
+.fm-crumbs { margin: 0 0 8px; } .fm-crumb { background: var(--surface); border: 1px solid var(--border); border-radius: 99px; padding: 1px 8px; color: var(--text); }
+.fm-main { display: block; }
+.fm.has-focus:not(.fm-wide) .fm-side { display: none; }
+.fm-wide .fm-main { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 16px; align-items: start; }
+.fm-wide .fm-side { border-right: 1px solid var(--border); padding-right: 10px; max-height: 75vh; overflow: auto; }
+.fm-list h4 { margin: 12px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.fm-row { display: flex; align-items: center; gap: 8px; width: 100%; padding: 6px 8px; border: 0; border-radius: 8px; background: none; color: var(--text); text-align: left; font: inherit; cursor: pointer; min-height: 36px; }
+.fm-row:hover { background: var(--surface-2); } .fm-row.on { background: color-mix(in srgb, var(--accent) 16%, transparent); font-weight: 600; }
+.fm-row.indent { padding-left: 24px; }
+.fm-row small { white-space: nowrap; }
+.fm-dot { width: 9px; height: 9px; border-radius: 3px; flex: none; background: var(--fmk); }
+.fm-node { display: flex; flex-direction: column; gap: 1px; width: 100%; padding: 6px 10px; border: 1px solid var(--border); border-left: 4px solid var(--fmk);
+  border-radius: 10px; background: var(--surface); color: var(--text); text-align: left; font: inherit; font-size: 13px; cursor: pointer; }
+button.fm-node:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--fmk) 35%, transparent); }
+.fm-node.focus { cursor: default; border: 2px solid var(--fmk); box-shadow: 0 0 0 4px color-mix(in srgb, var(--fmk) 18%, transparent); }
+.fm-title { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .05em; color: var(--fmk); }
+.fm-name { font-weight: 600; overflow-wrap: anywhere; } .fm-sub { font-size: 11.5px; color: var(--muted); }
+.fm-big { font: 600 24px var(--serif, Georgia, serif); }
+.fm-map { position: relative; display: flex; flex-direction: column; gap: 6px; }
+.fm-map h4 { margin: 10px 0 4px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.fm-col { display: flex; flex-direction: column; gap: 8px; }
+.fm-wires { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: visible; }
+.fm-labels { display: flex; flex-direction: column; align-items: flex-start; gap: 3px; padding: 4px 0 4px 16px; border-left: 2px solid var(--border); margin-left: 14px; }
+.fm-wire { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface); color: var(--text);
+  font: inherit; font-size: 11.5px; padding: 2px 9px; cursor: pointer; white-space: nowrap; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+.fm-wire::before { content: ""; width: 8px; height: 8px; border-radius: 2px; background: var(--rule-when); }
+.fm-w-follow::before { background: var(--rule-if); } .fm-w-sets::before, .fm-w-hand::before { background: var(--muted); } .fm-w-has::before { background: var(--border); }
+.fm-path { fill: none; stroke-width: 2; stroke: var(--rule-when); }
+.fm-p-follow { stroke: var(--rule-if); } .fm-p-sets { stroke: var(--muted); } .fm-p-hand { stroke: var(--muted); stroke-dasharray: 5 4; } .fm-p-has { stroke: var(--border); }
+.fm-wide .fm-map { display: grid; grid-template-columns: minmax(150px, 220px) minmax(70px, 1fr) minmax(160px, 230px) minmax(70px, 1fr) minmax(150px, 220px); gap: 0; align-items: center; }
+.fm-wide .fm-in { grid-column: 1; } .fm-wide .fm-mid { grid-column: 3; } .fm-wide .fm-out { grid-column: 5; }
+.fm-wide .fm-col { gap: 12px; } .fm-wide .fm-mid h4 { text-align: left; }
+.fm-wide .fm-wire { max-width: 160px; overflow: hidden; text-overflow: ellipsis; display: inline-block; }
+.fm-wide .fm-wire::before { display: inline-block; margin-right: 5px; vertical-align: 0; }
+.fm-wide .fm-labels { position: absolute; transform: translate(-50%, -50%); padding: 0; margin: 0; border: 0; align-items: center; z-index: 1; }
+.fm-more { align-self: flex-start; }
+.fm-rule .rblk { color: #fff; margin: 4px 0; padding: 6px 9px; border-radius: 9px; font-size: 13px; }
+.fm-rule .rblk-label { display: block; font-size: 10px; letter-spacing: .06em; text-transform: uppercase; opacity: .85; }
+
+/* Backgrounds (a panel's, a control's: js/control-panels.js): a picture or a drawing behind the
+   content, filling it, with a veil (fade) so the controls stay readable. */
+.cp-grid.has-bg, .cp-cell.has-bg { isolation: isolate; }
+.cp-grid.has-bg { position: relative; }
+.cp-bg { position: absolute; inset: 0; z-index: -1; overflow: hidden; border-radius: inherit; pointer-events: none; }
+.cp-bg-pic { display: block; width: 100%; height: 100%; }
+.cp-bg.fade-1::after, .cp-bg.fade-2::after { content: ""; position: absolute; inset: 0; background: var(--surface); opacity: .35; }
+.cp-bg.fade-2::after { opacity: .65; }
+/* On a panel with a background, its controls let it show through. */
+.cp-grid.has-bg > .cp-cell:not(.has-bg) { background: color-mix(in srgb, var(--surface-2) 50%, transparent); }
+.cp-grid.has-bg > .cp-cell.coloured:not(.has-bg) { background: color-mix(in srgb, var(--cp) 16%, color-mix(in srgb, var(--surface-2) 50%, transparent)); }
+/* A button's face over a background lets it show (a cell's own, or the panel's). */
+.cp-cell.has-bg { background: transparent; }
+.cp-cell.has-bg .cp-btn, .cp-grid.has-bg .cp-btn { background: color-mix(in srgb, var(--surface) 45%, transparent); }
+.cp-bg-field { display: flex; flex-direction: column; gap: 8px; }

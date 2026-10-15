@@ -70,6 +70,7 @@ const ICONS = {
   users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
   cog: '<path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M12 2v2M12 22v-2M17 20.66l-1-1.73M11 10.27 7 3.34M20.66 17l-1.73-1M3.34 7l1.73 1M14 12h8M2 12h2M20.66 7l-1.73 1M3.34 17l1.73-1M17 3.34l-1 1.73M11 13.73l-4 6.93"/>',
   eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
+  "eye-off": '<path d="m3 3 18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 3.9"/><path d="M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   more: '<circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/><circle cx="5" cy="12" r="1.3" fill="currentColor"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   eyeOff: '<path d="M3 3l18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6 0 9.9 6.6 10 7a17 17 0 0 1-3 3.7M6.6 6.6C3.8 8.4 2.1 11.7 2 12c.1.4 4 7 10 7a9.6 9.6 0 0 0 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
@@ -1825,11 +1826,16 @@ const hotspotNames = doc => {
 // (a drawing keeps an action's key as letters, digits, - and _: a name is kept as such, "Draw-a-card",
 // and matched back by the same form)
 const actionKey = s => String(s || "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
-function iconAppActions(doc, buttons = []) {
+// (where "panel": a GM panel's Picture control, which has no actions; its hotspots run the rule
+// book's rules for it: "A control is used")
+function iconAppActions(doc, buttons = [], where = "item") {
   const names = hotspotNames(doc);
   return [
-    names.length && { app: "signal", label: "Run the item's rules", hint: "Runs the item's rules for this hotspot (Rules tab: When a hotspot is used). Name the hotspot's layer to tell them apart.",
-      key: { label: "Hotspot", options: names.map(n => ({ value: actionKey(n), label: n })) } },
+    names.length && (where === "panel"
+      ? { app: "signal", label: "Run the rules", hint: "Runs the rule book's rules for this picture's hotspot (A control is used). Name the hotspot's layer to tell them apart.",
+        key: { label: "Hotspot", options: names.map(n => ({ value: actionKey(n), label: n })) } }
+      : { app: "signal", label: "Run the item's rules", hint: "Runs the item's rules for this hotspot (Rules tab: When a hotspot is used). Name the hotspot's layer to tell them apart.",
+      key: { label: "Hotspot", options: names.map(n => ({ value: actionKey(n), label: n })) } }),
     buttons.length && { app: "press", label: "Use one of the item's actions", hint: "As its button does (Rules tab: When it's used).",
       key: { label: "Action", options: buttons.map(b => ({ value: actionKey(b), label: b })) } },
   ].filter(Boolean);
@@ -3314,8 +3320,8 @@ async function openIconDrawer(opts, onSave) {
       // use them, and the Variables tab lists them (with this copy's real values in an inventory).
       variableGroups: [iconVariableGroup(opts.vars)],
       // What a hotspot can ask the app to do with the item (see makeIconInteractive).
-      // (none for a panel's control: buttons null)
-      appActions: opts.buttons === null ? [] : iconAppActions(opts.doc, opts.buttons || []),
+      // (a panel's Picture: its hotspots run the rule book's rules; other panel controls: none)
+      appActions: opts.panelPicture ? iconAppActions(opts.doc, [], "panel") : opts.buttons === null ? [] : iconAppActions(opts.doc, opts.buttons || []),
       // The Library: the app's Parts (kits in slots) and Symbols, and your drawings to put in as a
       // group (Catalog → Drawings; not the one being drawn).
       libraries: window.PARTS_LIBRARY || [],
@@ -3339,7 +3345,8 @@ async function openIconDrawer(opts, onSave) {
     editor.on("preferenceschange", prefs => writePref("mimic-icon-editor-prefs", JSON.stringify(prefs)));
     stopSync = syncIconVariables(editor, host, opts.vars);
     // Hotspots named as they're drawn: what "Run the item's rules" offers follows the drawing.
-    if (opts.buttons !== null) editor.store.on("change", doc => { editor.appActions = iconAppActions(doc, opts.buttons || []); });
+    if (opts.panelPicture) editor.store.on("change", doc => { editor.appActions = iconAppActions(doc, [], "panel"); });
+    else if (opts.buttons !== null) editor.store.on("change", doc => { editor.appActions = iconAppActions(doc, opts.buttons || []); });
     // Fit the canvas once the window has its final size.
     requestAnimationFrame(() => requestAnimationFrame(() => editor?.fitToView()));
   } catch (e) {
@@ -3571,8 +3578,8 @@ function setItemDrawing(it, d) {
 function drawingUsers(id) {
   const tabs = items => (items || []).flatMap(t => [t, ...tabs(t.items)]); // a Tabs control's tabs, every level
   return [...store.allCustomItems(), ...store.data.campaigns.flatMap(cp => [...cp.characters.flatMap(c => c.items.map(e => e.item)),
-    ...(cp.gmControls || []).flatMap(p => (p.controls || []).flatMap(c => [c, ...(c.type === "tabs" ? tabs(c.items) : []),
-      ...(c.board?.layers || []), ...(c.board?.pins || []).flatMap(pin => [pin, ...(pin.members || [])])]))])]
+    ...(cp.gmControls || []).flatMap(p => [...(p.bg ? [p.bg] : []), ...(p.controls || []).flatMap(c => [c, ...(c.bg ? [c.bg] : []), ...(c.type === "tabs" ? tabs(c.items) : []),
+      ...(c.board?.layers || []), ...(c.board?.pins || []).flatMap(pin => [pin, ...(pin.members || [])])])])])]
     .filter(it => it.iconLib === id);
 }
 
@@ -3614,7 +3621,8 @@ function pickDrawing(title, onPick, starters = true) {
 function editItemDrawing(it, done, opts = {}) {
   const d = findDrawing(it.iconLib);
   const name = opts.name ?? it.name, self = opts.self ?? it._self;
-  openIconDrawer({ doc: d?.doc || it.iconDoc, name, color: opts.name ? it.color : itemColor(it), vars: it._vars, buttons: opts.name ? null : itemButtonNames(it) }, (doc, svg) => {
+  openIconDrawer({ doc: d?.doc || it.iconDoc, name, color: opts.name ? it.color : itemColor(it), vars: it._vars, buttons: opts.name ? null : itemButtonNames(it),
+    panelPicture: !!opts.panelPicture }, (doc, svg) => {
     if (!doc) { setItemDrawing(it, null); return done(); }
     const others = d ? drawingUsers(d.id).filter(u => u !== self).length : 0;
     const asNew = () => { setItemDrawing(it, addDrawing(name, doc, svg)); done(); };
@@ -4398,7 +4406,7 @@ const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimi
 
 // ------------------------------------------------------------------ updates
 // The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
-const APP_VERSION = "1.0.7";
+const APP_VERSION = "1.0.8";
 const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
 const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
 const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);

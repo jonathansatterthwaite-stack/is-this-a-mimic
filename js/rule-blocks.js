@@ -16,14 +16,22 @@ function scopePartLabel(part, v) {
     return store.findItem(v)?.name || "an item";
   }
   if (part === "drawing") return `Drawing: ${findDrawing(v)?.name || "a drawing"}`;
-  if (part === "panel") return "a panel";
+  if (part === "panel") return `Panel: ${gmControls().find(p => p.id === v)?.name || "a panel"}`;
+  if (part === "control") return controlName(findControl(v)?.ctl) || "a control";
   return v;
 }
+// A GM panel's control by id: { panel, ctl } (null if it's gone); what it's called.
+function findControl(id) {
+  for (const panel of gmControls()) { const ctl = (panel.controls || []).find(c => c.id === id); if (ctl) return { panel, ctl }; }
+  return null;
+}
+const controlName = ctl => ctl && (ctl.label?.replace(/\{[^}]*\}/g, "…").trim() || ctl.name || CONTROL_TYPES.find(t => t[0] === ctl.type)?.[1] || "Control");
 const scopeParts = scope => SCOPE_PARTS.filter(p => scope?.[p] != null);
 // "For Pip's Lantern.", "For all weapons.", "For the world."
 function scopeWords(scope) {
   const parts = scopeParts(scope);
   if (!parts.length) return "For the world.";
+  if (scope.panel) return `For ${scope.control ? `${scopePartLabel("control", scope.control)} on ` : ""}the ${scopePartLabel("panel", scope.panel).replace(/^Panel: /, "")} panel.`;
   const who = scope.character ? scopePartLabel("character", scope.character) : null;
   const rest = parts.filter(p => p !== "character").map(p => scopePartLabel(p, scope[p]));
   const what = rest.join(", ");
@@ -52,8 +60,10 @@ function scopeRefines(a, b) {
 // [{ rule, scope, source: "book" | "item", owner? (the item carrying it), broken? (a book rule that
 // wouldn't pass the checks rules get before they run: cleanTriggers) }]
 function allRulesListed() {
+  // (a panel's rule whose panel or control has gone won't run either)
+  const gone = s => (s.panel && !gmControls().some(p => p.id === s.panel)) || (s.control && !findControl(s.control));
   const out = (store.campaign()?.rules || []).map(r => ruleOf(r)).filter(Boolean).map(rule => ({ rule, scope: rule.appliesTo || {}, source: "book",
-    broken: !cleanTriggers([rule]).length }));
+    broken: !cleanTriggers([rule]).length || gone(rule.appliesTo || {}) }));
   for (const item of store.catalog()) for (const rule of rulesOf(item)) out.push({ rule, scope: { item: item.id, ...(rule.appliesTo || {}) }, source: "item", owner: item });
   return out;
 }
@@ -84,6 +94,7 @@ function ruleBookView() {
     ["Characters", "", shown.filter(x => level(x) === "character")],
     ["Items", "by template, then item", shown.filter(x => level(x) === "item" && x.scope.item)],
     ["Drawings", "", shown.filter(x => level(x) === "item" && !x.scope.item)],
+    ["Panels", "run where a control is used", shown.filter(x => level(x) === "control")],
   ];
   const card = x => {
     const { overrides, overriddenBy } = overrideLinks(x, all);
@@ -115,8 +126,9 @@ function ruleBookView() {
 }
 
 // A rule of the book in blocks: new (null) or one to change.
-function openRuleEditor(existing) {
-  const draft = clone(existing || { id: "r" + uid(), when: "becomes", test: [{ value: "global.storm", op: ">", to: 5 }], do: [{ message: "" }] });
+// start: what a new one starts as; after(): once it's saved or deleted (a control's editor redraws).
+function openRuleEditor(existing, start = null, after = null) {
+  const draft = clone(existing || { id: "r" + uid(), ...(start || { when: "becomes", test: [{ value: "global.storm", op: ">", to: 5 }], do: [{ message: "" }] }) });
   if (!draft.id) draft.id = "r" + uid();
   if (draft.message) { (draft.do ||= []).push({ message: draft.message }); delete draft.message; }
   const body = h("div", { class: "rule-editor" });
@@ -133,10 +145,11 @@ function openRuleEditor(existing) {
     saveRuleBook(list => { const i = list.findIndex(r => r.id === cleaned.id); const out = [...list]; if (i >= 0) out[i] = cleaned; else out.push(cleaned); return out; },
       existing ? "Rule saved" : "Rule added");
     close();
+    after?.();
   };
   // (on a wide screen, beside the rule book)
   close = openModal(existing ? "Rule" : "New rule", body, { wide: true, dock: true, footer: [
-    existing && h("button", { class: "btn danger", onclick: () => { saveRuleBook(list => list.filter(r => r.id !== draft.id), "Rule removed"); close(); } }, icon("trash"), "Delete"),
+    existing && h("button", { class: "btn danger", onclick: () => { saveRuleBook(list => list.filter(r => r.id !== draft.id), "Rule removed"); close(); after?.(); } }, icon("trash"), "Delete"),
     h("button", { class: "btn", onclick: () => close() }, "Cancel"),
     h("button", { class: "btn primary", onclick: save }, icon("check"), "Save")] });
 }
@@ -144,10 +157,12 @@ function openRuleEditor(existing) {
 // ------------------------------------------------------------------ the blocks
 
 // The events a rule at this level can be for; the actions it can do.
-const levelEvents = level => [...clockwork.events.values()].filter(e => level === "item" || !e.kind);
+const levelEvents = level => [...clockwork.events.values()].filter(e => level === "control" ? e.kind === "control" : e.kind !== "control" && (level === "item" || !e.kind));
 // (those that ask the person, press actions, only where someone presses: a button, a hotspot)
 const pressedWhen = when => !!clockwork.events.get(when)?.pressed;
-const levelActions = (level, when) => [...ruleActions.values()].filter(a => (!a.level || a.level === level) && (!a.press || (level === "item" && pressedWhen(when))));
+// (a control's rules run as the world's do: on the GM's device, as the GM)
+const levelActions = (level, when) => [...ruleActions.values()].filter(a => (!a.level || a.level === level || (level === "control" && a.level === "world"))
+  && (!a.press || (level === "item" && pressedWhen(when))));
 // A first condition that makes sense where a rule is.
 const firstCond = level => level === "world" ? { value: "global.storm", op: ">", to: 5 }
   : level === "character" ? { value: "char.local.luck", op: ">=", to: 1 }
@@ -155,6 +170,7 @@ const firstCond = level => level === "world" ? { value: "global.storm", op: ">",
 const firstStateAddr = () => systemStates()[0] ? `item.state.${systemStates()[0].key}` : "item.charges";
 // A new action of a kind, for where the rule is.
 function newAction(kind, level, buttons = []) {
+  if (level === "control") level = "world";
   if (kind === "take") return { take: "random" };
   if (kind === "putIn") return { putIn: 1 };
   if (kind === "use") return { use: 1 };
@@ -188,7 +204,7 @@ function setWhen(r, v, level, opts = {}) {
   if (v !== "becomes" && v !== "while") delete r.test;
   if (v === "while") r.every ??= 1; else delete r.every;
   if (v === "used") r.button ||= "New action"; else delete r.button;
-  if (v === "signal") r.signal ||= drawingHotspots(opts.drawing || findDrawing(r.appliesTo?.drawing)?.doc)[0] || ""; else delete r.signal;
+  if (v === "signal") r.signal ||= drawingHotspots(opts.drawing || findDrawing(r.appliesTo?.drawing)?.doc)[0] || ""; else if (v !== "control") delete r.signal;
   r.do = (r.do || []).filter(a => !actionOf(a)?.press || pressedWhen(v));
   if (!r.do.length) r.do.push({ message: "" });
 }
@@ -201,6 +217,14 @@ const pillSelect = (label, options, value, onPick) => h("select", { class: "pill
 const pillInput = (label, value, onSet, attrs = {}) => h("input", { type: "text", class: "pill pill-input", value: value ?? "", "aria-label": label,
   onchange: e => onSet(e.target.value), ...attrs });
 
+// One condition as pills, edited in place: the value, how it's compared, with what (a rule's When
+// and If, a control's Shown when and Locked when).
+const condPills = (c, redraw, label = "Condition") => [
+  addressInput(c.value, v => { c.value = v; redraw(); }, false, `${label}: which value`).map(asPill),
+  pillSelect("Compared how", RULE_OPS.map(([op, w]) => [op, w]), c.op, v => { c.op = v; redraw(); }),
+  pillInput("To", c.to, v => { c.to = ruleTo(v); redraw(); }, { placeholder: "1, on, a choice or a formula" }),
+  c.op === "between" && pillInput("And", c.to2, v => { c.to2 = ruleTo(v); redraw(); }, { placeholder: "and" })];
+
 // The blocks of one rule, edited in place. opts: { onChange (redraw), book (a rule-book rule: its
 // scope is free, and what it overrides shows), self ("item" | "template": a rule an item or a
 // template carries: it applies to that, and can add a character) }.
@@ -210,11 +234,10 @@ function ruleBlocks(r, opts = {}) {
   // The drawing's hotspots (an item's, or the scope's drawing), and the item's actions (buttons).
   const hotspots = drawingHotspots(opts.drawing || findDrawing(r.appliesTo?.drawing)?.doc);
   const buttons = (opts.buttons || []).filter(b => b !== r.button);
-  const conds = (list, label) => list.map((c, i) => h("div", { class: "rblk-line" },
-    addressInput(c.value, v => { c.value = v; redraw(); }, false, `${label}: which value`).map(asPill),
-    pillSelect("Compared how", RULE_OPS.map(([op, w]) => [op, w]), c.op, v => { c.op = v; redraw(); }),
-    pillInput("To", c.to, v => { c.to = ruleTo(v); redraw(); }, { placeholder: "1, on, a choice or a formula" }),
-    c.op === "between" && pillInput("And", c.to2, v => { c.to2 = ruleTo(v); redraw(); }, { placeholder: "and" }),
+  // A Picture control's hotspots (its rule can be for one of them).
+  const pictured = r.appliesTo?.control && findControl(r.appliesTo.control)?.ctl;
+  const pictureHotspots = pictured?.type === "icon" ? drawingHotspots(pictured.iconDoc) : [];
+  const conds = (list, label) => list.map((c, i) => h("div", { class: "rblk-line" }, condPills(c, redraw, label),
     h("button", { type: "button", class: "rblk-x", "aria-label": `Remove this ${label.toLowerCase()}`, onclick: () => { list.splice(i, 1); redraw(); } }, "×")));
 
   const watched = r.when === "becomes" || r.when === "while";
@@ -223,7 +246,9 @@ function ruleBlocks(r, opts = {}) {
       r.when === "used" && pillInput("Button", r.button, v => { r.button = v.trim(); redraw(); }, { placeholder: "e.g. Draw a card", maxlength: 40 }),
       r.when === "signal" && (hotspots.length
         ? pillSelect("Which hotspot", [...new Set([...hotspots, ...(r.signal ? [r.signal] : [])])].map(n => [n, n]), r.signal, v => { r.signal = v; redraw(); })
-        : pillInput("Which hotspot", r.signal, v => { r.signal = v.trim(); redraw(); }, { placeholder: "the hotspot layer's name", maxlength: 40 }))),
+        : pillInput("Which hotspot", r.signal, v => { r.signal = v.trim(); redraw(); }, { placeholder: "the hotspot layer's name", maxlength: 40 })),
+      r.when === "control" && pictureHotspots.length > 0 && pillSelect("Which hotspot", [["", "any of its hotspots"], ...[...new Set([...pictureHotspots, ...(r.signal ? [r.signal] : [])])].map(n => [n, n])],
+        r.signal || "", v => { if (v) r.signal = v; else delete r.signal; redraw(); })),
     watched && conds(r.test || (r.test = []), "Condition"),
     watched && h("div", { class: "rblk-line" },
       h("button", { type: "button", class: "pill pill-add", onclick: () => { r.test.push(firstCond(level)); redraw(); } }, "+ and"),
@@ -266,24 +291,33 @@ function ruleBlocks(r, opts = {}) {
 
   // Applies to: its parts (a rule an item carries: that item, and maybe a character).
   const scope = r.appliesTo || {};
-  const setPart = (part, v) => { const s = { ...(r.appliesTo || {}) }; if (v == null) delete s[part]; else s[part] = v; if (Object.keys(s).length) r.appliesTo = s; else delete r.appliesTo;
+  const setPart = (part, v) => { const s = { ...(r.appliesTo || {}) }; if (v == null) delete s[part]; else s[part] = v;
+    if (part === "panel" && s.control && findControl(s.control)?.panel.id !== s.panel) delete s.control; // (a control is on its panel)
+    if (part === "control" && v && !s.panel) s.panel = findControl(v)?.panel.id;
+    if (!s.control) delete r.signal;
+    if (Object.keys(s).length) r.appliesTo = s; else delete r.appliesTo;
     // (a rule that changes level keeps only what it can still do there)
     const lvl = opts.self ? "item" : ruleLevel(Object.keys(s).length ? s : null);
-    if (!levelEvents(lvl).some(e => e.name === r.when)) setWhen(r, "becomes", lvl, opts);
+    if (!levelEvents(lvl).some(e => e.name === r.when)) setWhen(r, levelEvents(lvl)[0].name, lvl, opts);
     r.do = (r.do || []).filter(a => levelActions(lvl, r.when).includes(actionOf(a)));
     redraw(); };
   const chars = [...new Map([...gmChars(), ...store.state.characters].map(c => [c.id, c])).values()];
   const partOptions = part => part === "character" ? chars.map(c => [c.id, c.name])
     : part === "item" ? [{ group: "Templates", options: treeTemplates({ ghosts: false }).map(t => ["template:" + t.id, `All ${templatePlural(t).toLowerCase()}`]) },
         { group: "Items", options: store.catalog().filter(i => i.name).sort((a, b) => a.name.localeCompare(b.name)).map(i => [i.id, i.name]) }]
-    : part === "drawing" ? drawingLibrary().map(d => [d.id, d.name || "Untitled drawing"]) : [];
+    : part === "drawing" ? drawingLibrary().map(d => [d.id, d.name || "Untitled drawing"])
+    : part === "panel" ? gmControls().filter(p => p.kind === "panel" || p.controls).map(p => [p.id, p.name || "Untitled panel"])
+    : part === "control" ? (gmControls().find(p => p.id === scope.panel)?.controls || []).filter(c => c.type !== "tabs").map(c => [c.id, controlName(c)]) : [];
+  // What can be added to the scope: a panel's control's rule names only its panel and control;
+  // other rules a character, item or drawing (a rule an item carries: a character).
+  const addable = opts.self ? ["character"] : scope.panel ? ["control"] : scopeParts(scope).length ? ["character", "item", "drawing"] : ["character", "item", "drawing", "panel"];
   const firstOf = part => { const o = partOptions(part)[0]; return Array.isArray(o) ? o[0] : o?.options?.[0]?.[0]; };
   const scopeBlock = ruleBlock("scope", "Applies to", h("div", { class: "rblk-line" },
     opts.self && h("span", { class: "pill pill-fixed" }, opts.self === "template" ? "Items made from it" : "This item"),
     SCOPE_PARTS.filter(p => scope[p] != null && !(opts.self && p === "item")).map(p => [
       pillSelect(`Applies to: ${p}`, partOptions(p), scope[p], v => setPart(p, v)),
       h("button", { type: "button", class: "rblk-x", "aria-label": `Remove the ${p}`, onclick: () => setPart(p, null) }, "×")]),
-    (opts.self ? ["character"] : ["character", "item", "drawing"]).filter(p => scope[p] == null && partOptions(p).length)
+    addable.filter(p => scope[p] == null && partOptions(p).length)
       .map(p => h("button", { type: "button", class: "pill pill-slot", onclick: () => setPart(p, firstOf(p)) }, `+ ${p === "item" ? "item or template" : p}`)),
     !opts.self && !scopeParts(scope).length && h("span", { class: "rblk-note" }, "the world")));
 
@@ -305,7 +339,8 @@ function ruleBlocks(r, opts = {}) {
     const groups = h("div", { class: "rule-palette" },
       h("h4", null, "When"), h("div", { class: "rule-palette-row" },
         levelEvents(level).map(e => chip("when", e.label, () => setWhen(r, e.name, level, opts))),
-        chip("when", "a control changes", null, "Comes with controls as objects (later)")),
+        !opts.self && level !== "control" && chip("when", "A control is used", () => { setPart("panel", firstOf("panel")); },
+          partOptions("panel").length ? null : "Make a panel first (GM → Controls → Panels)")),
       level === "item" && [h("h4", null, "Ready-made actions"), h("div", { class: "rule-palette-row" },
         actionStarters().map(s => chip("when", s.label, () => { Object.assign(r, clone(s.rule)); delete r.test; delete r.every; })))],
       h("h4", null, "If"), h("div", { class: "rule-palette-row" },
@@ -315,8 +350,7 @@ function ruleBlocks(r, opts = {}) {
       h("h4", null, "Do"), h("div", { class: "rule-palette-row" },
         levelActions(level, r.when).map(a => chip(a.key === "message" ? "say" : "action", a.label, () => { r.do.push(newAction(a.name, level, buttons)); }))),
       !opts.self && [h("h4", null, "Applies to"), h("div", { class: "rule-palette-row" },
-        ["character", "item", "drawing"].filter(p => scope[p] == null && partOptions(p).length).map(p => chip("scope", p === "item" ? "an item or template" : `a ${p}`, () => setPart(p, firstOf(p)))),
-        chip("scope", "a panel", null, "Comes with controls as objects (later)"))]);
+        addable.filter(p => scope[p] == null && partOptions(p).length).map(p => chip("scope", p === "item" ? "an item or template" : `a ${p}`, () => setPart(p, firstOf(p)))))]);
     closePal = openModal("Add a block", groups);
   };
 

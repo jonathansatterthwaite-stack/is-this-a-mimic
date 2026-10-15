@@ -45,6 +45,9 @@ clockwork.event("equipped", { label: "It's equipped", kind: "item" });
 clockwork.event("unequipped", { label: "It's unequipped", kind: "item" });
 clockwork.event("used", { label: "It's used (a button)", kind: "item", pressed: true });
 clockwork.event("signal", { label: "A hotspot is used", kind: "item", pressed: true });
+// A GM panel's control: pressed, flipped, let go, picked, a pin dropped, a picture's hotspot
+// (`signal`: which; none, any). Its rule applies to the panel or the control (controlUsed).
+clockwork.event("control", { label: "A control is used", kind: "control" });
 const RULE_WHEN = [...clockwork.events.values()].map(e => [e.name, e.label]);
 
 // ------------------------------------------------------------------ formulas
@@ -279,9 +282,10 @@ function bookRules() {
   if (!rules) rulesCache.set(list, rules = cleanTriggers(list).map(ruleOf).filter(Boolean));
   return rules;
 }
-// A rule's level, from what it applies to: "item", "character" or "world".
-const ruleLevel = scope => !scope ? "world" : scope.item || scope.drawing || scope.panel ? "item" : scope.character ? "character" : "world";
-const ctxLevel = ctx => ctx.entry ? "item" : ctx.char ? "character" : "world";
+// A rule's level, from what it applies to: "control" (a panel or a control on it), "item",
+// "character" or "world".
+const ruleLevel = scope => !scope ? "world" : scope.panel || scope.control ? "control" : scope.item || scope.drawing ? "item" : scope.character ? "character" : "world";
+const ctxLevel = ctx => ctx.panel ? "control" : ctx.entry ? "item" : ctx.char ? "character" : "world";
 clockwork.ruleSource("book", ctx => bookRules().filter(r => ruleLevel(r.appliesTo) === ctxLevel(ctx)).map(rule => ({ rule, scope: rule.appliesTo || {} })));
 // A set (a deck of cards) with no actions of its own: Draw a card (one at random) and Take all out.
 clockwork.ruleSource("set", ctx => {
@@ -294,17 +298,6 @@ clockwork.ruleSource("set", ctx => {
 });
 // The rules that run for an entry: from every source, the most specific for each event.
 const entryRules = (char, e) => clockwork.rulesFor({ char, entry: e }, ruleKey).map(x => x.rule);
-
-// The addresses a rule reads (its conditions) and writes (its actions).
-function ruleAddresses(r) {
-  const reads = new Set(), writes = new Set();
-  for (const c of [...(r.test || []), ...(r.if || [])]) {
-    reads.add(c.value);
-    for (const t of [c.to, c.to2]) if (typeof t === "string") for (const m of t.matchAll(/[A-Za-z_]\w*(?:\.\w+)+/g)) if (clockwork.find(m[0])) reads.add(m[0]);
-  }
-  for (const a of r.do || []) { const d = actionOf(a); if (d && d.key !== "message") writes.add(a[d.key]); }
-  return { reads: [...reads], writes: [...writes] };
-}
 
 // ------------------------------------------------------------------ running them
 
@@ -333,7 +326,7 @@ function fireRule(ctx, r) {
   const out = [], e = ctx.entry, who = e ? entryName(e) : ctx.char ? ctx.char.name : "";
   const say = m => out.push(who ? `${who}: ${m}` : m);
   if (!allHold(ctx, r.if)) return out;
-  const id = `${ctx.char?.id || "world"}/${e?.uid || ""}/${ruleKey(r)}`;
+  const id = `${ctx.char?.id || ctx.panel || "world"}/${e?.uid || ctx.control || ""}/${ruleKey(r)}`;
   if (tooOften(id)) {
     if (ruleFires.get(id).length === 26) say("a rule is firing too often, so it's held back");
     return out;
@@ -369,6 +362,20 @@ function runLevelRules({ ctx, id }) {
   if (!before || !clockworkOn()) return out;
   for (const r of rules) if (now[ruleKey(r)] && before[ruleKey(r)] === false) out.push(...fireRule(ctx, r));
   return out;
+}
+
+// A GM panel's control was used: the rule book's rules for it ("A control is used", applying to its
+// panel or to it; the most specific for each event), here, as the GM (so they can set Global values
+// and open shops). value: its value after the change; signal: a picture's hotspot (rules naming no
+// hotspot run for any).
+function controlUsed(panelId, controlId, value, signal = "") {
+  if (!clockworkOn() || !isGmDevice() || !panelId) return;
+  const ctx = { by: "gm", panel: panelId, control: controlId, controlValue: typeof value === "number" ? value : undefined };
+  const rules = clockwork.rulesFor(ctx, ruleKey).map(x => x.rule).filter(r => r.when === "control" && (!r.signal || r.signal === signal));
+  if (!rules.length) return;
+  const messages = rules.flatMap(r => fireRule(ctx, r));
+  store.update(() => {});
+  if (messages.length) toast(messages.join(" · "));
 }
 
 // Run the rules of one character's items. Returns { changed, fired, messages }.
@@ -542,6 +549,7 @@ function ruleWordsOf(r) {
     : r.when === "while" ? `Every ${every(r.every ?? 1)} while ${(r.test || []).map(ruleCondWords).join(" and ")}`
     : r.when === "used" ? `When “${r.button}” is used`
     : r.when === "signal" ? `When the hotspot “${r.signal}” is used`
+    : r.when === "control" ? (r.signal ? `When its hotspot “${r.signal}” is used` : "When the control is used")
     : "When " + ({ acquired: "it enters the inventory", equipped: "it's equipped", unequipped: "it's unequipped" }[r.when] || r.when);
   const cond = r.if?.length ? `, if ${r.if.map(ruleCondWords).join(" and ")}` : "";
   const acts = (r.do || []).map(a => actionOf(a)?.words(a)).filter(Boolean);
@@ -558,7 +566,7 @@ function ruleAddressChoices(settable = false) {
   out.push({ address: "item.charges", label: "Charges left" });
   if (!settable) {
     out.push(...[["item.qty", "How many in the stack"], ["item.equipped", "1 when equipped"], ["item.fill", "How full, 0 to 1"],
-      ["item.worth", "Worth"], ["item.weight", "Weight"], ["char.carried", "Weight carried"]].map(([address, label]) => ({ address, label })));
+      ["item.worth", "Worth"], ["item.weight", "Weight"], ["char.carried", "Weight carried"], ["control.value", "A control's value, as it's used"]].map(([address, label]) => ({ address, label })));
     for (const st of systemStates()) {
       out.push({ address: `char.count.${st.key}`, label: `Items ${st.label.toLowerCase()}` });
       if (st.limit) out.push({ address: `char.limit.${st.key}`, label: st.limit.label || `${st.label} limit` });
@@ -596,7 +604,8 @@ function cleanTriggers(list) {
   const scopeOf = s => {
     if (!s || typeof s !== "object") return null;
     const o = {};
-    for (const k of ["character", "item", "drawing", "panel"]) if (typeof s[k] === "string" && s[k] && s[k].length <= 80) o[k] = s[k];
+    for (const k of SCOPE_PARTS) if (typeof s[k] === "string" && s[k] && s[k].length <= 80) o[k] = s[k];
+    if (o.control && !o.panel) delete o.control; // (a control is on a panel)
     return Object.keys(o).length ? o : null;
   };
   return (Array.isArray(list) ? list : []).slice(0, 30).map(t => {
@@ -613,7 +622,7 @@ function cleanTriggers(list) {
         : { [d.key]: a[d.key], [d.key === "set" ? "to" : "by"]: toOf(a[d.key === "set" ? "to" : "by"]) };
     });
     if ((watched && !test.length) || (!acts.length && !t.message)) return null;
-    const button = t.when === "used" ? text(t.button, 40).trim() : "", signal = t.when === "signal" ? text(t.signal, 40).trim() : "";
+    const button = t.when === "used" ? text(t.button, 40).trim() : "", signal = t.when === "signal" || t.when === "control" ? text(t.signal, 40).trim() : "";
     if ((t.when === "used" && !button) || (t.when === "signal" && !signal)) return null;
     const scope = scopeOf(t.appliesTo);
     return { ...(typeof t.id === "string" && t.id ? { id: text(t.id, 40) } : {}), ...(typeof t.name === "string" && t.name.trim() ? { name: text(t.name.trim(), 80) } : {}),

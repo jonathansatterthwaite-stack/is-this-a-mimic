@@ -142,6 +142,8 @@ clockwork.value("char.limit.*", { label: "How many may be in this state", get: (
 clockwork.value("char.local.*", { label: "A character's Local value", get: (c, name) => c.char ? charLocal(c.char.id, name) : undefined });
 clockwork.value("local.*", { label: "An item's Local value, else its character's", get: (c, name) => c.char ? localValue(c.char.id, c.entry?.uid, name) : undefined });
 clockwork.value("global.*", { label: "A Global value", get: (c, name) => globalValue(name) });
+// A panel's control, as it's used (its rules: "A control is used"): its value after the change.
+clockwork.value("control.value", { label: "The control's value, as it's used", get: c => c.controlValue });
 
 // ------------------------------------------------------------------ objects and scopes
 // (docs/clockwork-overhaul-plan.md) Everything interactive is an object of a kind: the world (the
@@ -163,17 +165,18 @@ clockwork.kind("world", { label: "The world", addresses: ["global.*"] });
 clockwork.kind("character", { label: "A character", addresses: ["char.*"] });
 clockwork.kind("item", { label: "An item", addresses: ["item.*", "local.*"] });
 clockwork.kind("drawing", { label: "A drawing" });
-clockwork.kind("panel", { label: "A panel's control" });
+clockwork.kind("panel", { label: "A panel or control", addresses: ["control.*"] });
 // The kind of object an address is a property of.
 clockwork.kindOf = address => [...clockwork.kinds.values()].find(k => k.addresses.some(p =>
   p === address || (p.endsWith(".*") && String(address).startsWith(p.slice(0, -1)))))?.name;
 
-const SCOPE_PARTS = ["character", "item", "drawing", "panel"];
-// What a context is, for scopes: its character, item (catalog id and template lineage), drawing, panel.
+const SCOPE_PARTS = ["character", "item", "drawing", "panel", "control"];
+// What a context is, for scopes: its character, item (catalog id and template lineage), drawing,
+// panel and control (a GM panel's: ids).
 function scopeFacts(ctx) {
   const e = ctx.entry, it = e ? currentItem(e, ctx.char) : null;
   return { character: ctx.char?.id, itemIds: it ? [e.srcId, it.id].filter(Boolean) : [],
-    templates: it ? templateLineage(itemTemplate(it)).map(t => t.id) : [], drawing: ctx.drawing ?? it?.iconLib, panel: ctx.panel };
+    templates: it ? templateLineage(itemTemplate(it)).map(t => t.id) : [], drawing: ctx.drawing ?? it?.iconLib, panel: ctx.panel, control: ctx.control };
 }
 // facts: the context's facts, or a function giving them (worked out only when a scope needs them).
 function scopeMatches(scope, ctx, facts) {
@@ -499,52 +502,12 @@ function shopValueReaders() {
 // The name of the Local value holding a state's limit (5e: attuneSlots).
 const limitValueName = st => st?.limit?.value || null;
 
-// What sets values by hand: panels' controls, boards' pins among them (the GM's Controls tab).
-// [{ label, scope, target, names }]
-function valueSetters() {
-  return (store.state.gmControls || []).flatMap(panel => (panel.controls || []).flatMap(c => c.type === "board"
-    ? pinSetters(c.board || {}).map(p => ({ label: p.group ? `the group “${p.group.label || "Group"}” on ${panel.name}` : `the pin “${p.label || "Pin"}” on ${panel.name}`,
-      scope: p.scope, target: p.target, names: [p.xVar, p.yVar].filter(Boolean) }))
-    : c.type === "text" ? []
-    : [{ label: `the ${{ toggle: "switch", range: "range slider" }[c.type] || c.type} “${c.label || c.name || c.type}” on ${panel.name}`, scope: c.scope, target: c.target,
-      names: (c.type === "polygon" ? (c.vertices || []).map(v => v.name) : [c.name, c.name2]).filter(Boolean) }].filter(s => s.names.length)));
-}
-
 // ------------------------------------------------------------------ connections
-// What joins an item to Clockwork, for the GM's Clockwork tab and the cog beside its name.
+// What joins an item to Clockwork (the flow map, js/flow-map.js, draws all of it).
 
 const layerHasContent = L => !!L && Object.entries(L).some(([, v]) => v !== "" && v != null && (typeof v !== "object" || Object.keys(v).length));
 
-function itemConnections(char, e) {
-  const it = e.item, ctx = { char, entry: e };
-  const triggers = rulesOf(it); // (checked: js/triggers.js)
-  const layers = systemStates().filter(st => layerHasContent(it.layers?.[st.key]));
-  const doc = it.iconDoc, refs = doc ? drawingValueRefs(doc) : new Map();
-  const live = !!doc && isLiveDrawing(doc);
-  // The states that change it (its layers), and what its rules read and change (js/triggers.js).
-  const addresses = new Set(layers.map(st => `item.state.${st.key}`));
-  for (const r of rulesOf(it)) { const a = ruleAddresses(r); a.reads.forEach(x => addresses.add(x)); a.writes.forEach(x => addresses.add(x)); }
-  const reads = [
-    ...[...addresses].filter(a => !/^(global|local)\./.test(a) || ![...refs.values()].some(r => a === `${r.scope}.${r.name}`))
-      .map(a => ({ address: a, label: addressLabel(a), value: clockwork.get(ctx, a) })),
-    ...[...refs.values()].map(r => ({ address: r.scope === "global" ? `global.${r.name}` : `local.${r.name}`, label: r.varName,
-      value: r.scope === "any" ? localValue(char.id, e.uid, r.name) ?? globalValue(r.name) : clockwork.get(ctx, r.scope === "global" ? `global.${r.name}` : `local.${r.name}`),
-      fallback: r.spec?.value })),
-  ];
-  // Set on this item itself: its Locals, and the GM's overrides of its states.
-  const own = valueSet().items?.[`${char.id}/${e.uid}`] || {};
-  const setHere = Object.entries(own).filter(([k]) => !k.startsWith("gm_state_")).map(([k, v]) => ({ name: keyName(k), value: valueNow(v), moving: stillMoving(v) }));
-  const overrides = Object.entries(own).filter(([k]) => k.startsWith("gm_state_"))
-    .map(([k, v]) => ({ state: stateByKey(k.slice(9)), on: !!v })).filter(o => o.state);
-  // The controls that reach it: set on this item, or set a value its icon reads.
-  const setters = valueSetters().filter(s =>
-    (s.scope === "item" && s.target === `${char.id}/${e.uid}`) ||
-    (s.scope !== "item" && s.names.some(n => [...refs.values()].some(r => r.name === n &&
-      (s.scope === "party" ? r.scope !== "local" : s.target === char.id && r.scope !== "global")))));
-  return { triggers, layers, refs, live, reads, setHere, overrides, setters,
-    uses: triggers.length > 0 || layers.length > 0 || live || refs.size > 0 || setHere.length > 0 || overrides.length > 0 };
-}
-
+// Does an item take part (the cog beside its name: the Connections map, centred on it)?
 const usesClockwork = (char, e) => {
   const it = e.item;
   return (it.triggers || []).length > 0 || (!!it.iconDoc && (isLiveDrawing(it.iconDoc) || drawingValueRefs(it.iconDoc).size > 0))

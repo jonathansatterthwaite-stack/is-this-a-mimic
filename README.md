@@ -1,4 +1,4 @@
-# Is This A Mimic(s)?
+# Is This A Mimic(s)? (ITAM(s)?)
 
 **An inventory manager for tabletop RPGs.** Every character's gear, coins and containers, on PC, phone or in the browser: on your own, or shared at the table over your own Wi-Fi, with no account and no internet needed.
 

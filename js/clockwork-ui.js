@@ -1,6 +1,6 @@
-// Clockwork in the GM tab: the Values tab (Global and Local values, and the boards), the
-// Clockwork tab (what's connected to what), and the cog beside a connected item's name, which
-// only GMs see. See js/clockwork.js.
+// Clockwork in the GM tab: the Values tab (Global and Local values, and the boards), and the cog
+// beside a connected item's name, which only GMs see. See js/clockwork.js; the Connections tab is
+// js/flow-map.js.
 
 // ------------------------------------------------------------------ a value's control
 
@@ -137,80 +137,6 @@ function valuesView() {
       h("code", null, "local_name"), ")."),
     cardGrid([globalCard, ...localCards], { cls: "gm-values" }),
     h("p", { class: "muted small pad" }, "Panels and boards for setting these in play are on the Panels tab."),
-  ];
-}
-
-// ------------------------------------------------------------------ the Clockwork tab
-
-const LAYER_FIELD_WORDS = { cost: "worth", acBonus: "AC bonus", maxCharges: "charges" };
-
-function layerWords(L) {
-  const fields = Object.keys(L).filter(k => !LAYER_META.has(k) && L[k] !== "" && L[k] != null).map(k => LAYER_FIELD_WORDS[k] || k);
-  const feats = Object.entries(L.features || {}).filter(([, on]) => on).map(([k]) => featureByKey(k)?.label || k);
-  const locks = (L.locks || []).map(k => stateByKey(k)?.label || k);
-  return [fields.length && `changes ${fields.join(", ")}`, feats.length && `turns on ${feats.join(", ")}`,
-    locks.length && `locks ${locks.join(", ")}`].filter(Boolean).join("; ") || "nothing yet";
-}
-
-function clockworkItemCard(c, e) {
-  const k = itemConnections(c, e), key = `${c.id}/${e.uid}`;
-  const line = (label, ...content) => h("div", { class: "cw-line" }, h("span", { class: "cw-label muted small" }, label), h("div", { class: "cw-what" }, content));
-  const changers = [
-    ...statesFor(e).filter(st => k.reads.some(r => r.address === `item.state.${st.key}`) && canPlayerSet(c, e, st.key))
-      .map(st => `the player (${st.label})`),
-    k.reads.some(r => r.address.startsWith("item.state.")) && `the ${term("gm")}'s state menu`,
-    k.triggers.length > 0 && "its own rules",
-    ...k.setters.map(s => s.label),
-    k.refs.size > 0 && `the ${term("gm")}'s values (Values tab)`,
-  ].filter(Boolean);
-  return h("div", { class: "group cw-item" + (ui.cwFocus === key ? " focus" : ""), id: "cw-" + key.replace("/", "-") },
-    h("div", { class: "group-head" },
-      itemIcon(currentItem(e, c), "row-icon", () => entryIconVars(c, e)),
-      h("h3", null, entryName(e)),
-      statesOnFor(c, e).map(st => h("span", { class: "tag attuned" }, st.label.toLowerCase()))),
-    h("div", { class: "cw-body" },
-      k.triggers.length > 0 && line("Rules", h("ul", { class: "cw-rules" }, k.triggers.map(t => h("li", null, ruleWords(t))))),
-      k.layers.length > 0 && line("Layers", h("ul", { class: "cw-rules" }, k.layers.map(st => h("li", null,
-        h("b", null, st.label), ` (${stateOn(c, e, st.key) ? "on" : "off"}): ${layerWords(e.item.layers[st.key])}`)))),
-      k.reads.length > 0 && line("Reads", k.reads.map(r => h("span", { class: "chip" + (r.value === undefined ? " muted" : ""), title: r.address },
-        `${r.label} = ${r.value === undefined ? (r.fallback !== undefined ? `${r.fallback} (default)` : "not set") : r.value}`))),
-      (k.overrides.length > 0 || k.setHere.length > 0) && line("Set here",
-        k.overrides.map(o => h("span", { class: "chip" }, `${o.state.label} held ${o.on ? "on" : "off"} by the ${term("gm")}`)),
-        k.setHere.map(v => h("span", { class: "chip" }, `${v.name} = ${v.value}`))),
-      changers.length > 0 && line("Changed by", changers.join(" · ")),
-      (k.live || k.layers.length > 0) && line("Shows", [k.live && "its live icon", k.layers.length > 0 && "what it is now (its layers)"].filter(Boolean).join(" · "))));
-}
-
-function clockworkView() {
-  const chars = gmChars();
-  const groups = chars.map(c => [c, byName(c.items.filter(e => usesClockwork(c, e)))]).filter(([, list]) => list.length);
-  // Opened from an item's cog: show it.
-  if (ui.cwFocus) {
-    const id = "cw-" + ui.cwFocus.replace("/", "-");
-    setTimeout(() => { document.getElementById(id)?.scrollIntoView({ block: "center" }); ui.cwFocus = null; }, 0);
-  }
-  const users = valueUsers();
-  const globals = [...knownValues().values()].filter(v => v.scope === "global");
-  const pinsFor = name => valueSetters().filter(s => s.scope === "party" && s.names.includes(name)).map(s => s.label);
-  return [
-    h("section", { class: "cw" },
-      h("p", { class: "muted small" }, "What makes items react: their rules and layers, the values their icons read, and what changes them. Items with a cog beside their name (only you see it) are here."),
-      groups.length ? groups.map(([c, list]) => h("div", { class: "cw-char" },
-        h("h3", { class: "cw-char-name" }, c.name, c.mine && h("span", { class: "tag" }, "yours")),
-        cardGrid(list.map(e => clockworkItemCard(c, e)))))
-        : emptyState("link", "Nothing is connected yet. Items with rules, layers, or a drawn icon that reads values show up here.")),
-    globals.length > 0 && h("section", { class: "cw" },
-      h("h3", null, "What each Global value reaches"),
-      h("p", { class: "muted small" }, "Moving one changes all of these."),
-      cardGrid(globals.map(v => {
-        const using = users.get(`global:${v.name}`) || [], pins = pinsFor(v.name), shops = shopValueReaders().filter(r => r.name === v.name);
-        return h("div", { class: "group" }, h("div", { class: "row gm-level" }, h("div", { class: "row-main static" },
-          h("div", { class: "row-title" }, h("code", null, v.name), h("span", { class: "muted" }, ` = ${showValue(v, globalValue(v.name) ?? v.value)}`)),
-          h("div", { class: "row-sub" }, [using.length ? "Read by " + using.map(u => `${u.char.name}'s ${entryName(u.e)}`).join(", ") : !shops.length && "Nothing reads it",
-            ...shops.map(r => r.what === "opens" ? `opens ${r.shop.name}` : r.what === "prices" ? `sets ${r.shop.name}'s prices`
-              : `puts ${r.item.name} on sale at ${r.shop.name}`),
-            pins.length && "set by " + pins.join(", ")].filter(Boolean).join(" · ")))));
-      }), { min: 320 })),
   ];
 }
 

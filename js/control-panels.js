@@ -28,6 +28,17 @@
 //                                          values of whoever is chosen in it, a control that sets values
 //                                          sets theirs (scope "character"; else scope/target as above)
 //          board: { image?, layers?, pins } board: a picture with pins (see gmBoard, js/gm-controls.js)
+//          showIf?, lockIf?                a condition ({ value, op, to }, as a rule's): shown only
+//                                          while it holds; locked (can't be used) while it holds.
+//                                          Rules show, hide and lock controls by setting the values
+//                                          these read (see Following values below). A panel can have
+//                                          a showIf too. A label or Text can show values: "{door}".
+//          action "rules"                  button: sets nothing, just runs its rules
+//          bg?                             a background (a panel can have one too): { image } (a
+//                                          stored picture) or a drawing (iconDoc, iconSvg, iconLib:
+//                                          live with the values it reads), fit "cover" (fill, the
+//                                          default) | "contain" | "stretch", fade 0 | 1 | 2 (a veil
+//                                          over it, so controls stay readable). See Backgrounds.
 //          levels, items: [tab]            tabs: a tree of tabs, levels deep (see Tabs controls below);
 //                                          a tab's picture: icon, or a drawing (iconDoc, iconSvg, iconLib) }
 
@@ -38,6 +49,27 @@ const CONTROL_KINDS = CONTROL_TYPES.filter(([k]) => k !== "range");
 const CONTROL_GROUPS = [["Layout", ["tabs"]], ["Display", ["text", "icon"]], ["Interactive", ["slider", "toggle", "button", "dropdown", "polygon", "board"]]];
 const SETS_VALUE = new Set(["slider", "toggle", "button", "dropdown"]); // one value, `name`
 const isUpright = ctl => ctl.h > ctl.w;
+
+// ------------------------------------------------------------------ following values
+// Controls follow values, as a board's pins already do: shown while a condition holds (showIf),
+// locked while one holds (lockIf), and words with values in them ("The door is {door}"). So a rule
+// hides, shows or locks a control, or changes its words, by setting a value. Their rules: "A
+// control is used" (js/triggers.js: controlUsed).
+const controlCondHolds = c => !!c && typeof conditionHolds === "function" && conditionHolds({ by: "gm" }, c);
+const controlShown = c => !c?.showIf || controlCondHolds(c.showIf);
+const controlLocked = c => !!c?.lockIf && controlCondHolds(c.lockIf);
+// Words with values filled in. {name}: the value in the control's own scope (the one it sets);
+// {global.storm}, {char.local.luck}…: any by its address. A value with choices shows the choice.
+function fillWords(ctl, text, specs) {
+  if (!text || !text.includes("{")) return text;
+  return text.replace(/\{\s*([A-Za-z_][\w.]*)\s*\}/g, (m, key) => {
+    if (!key.includes(".")) return showValue(namedSpec(ctl, key, specs), namedValue(ctl, key, specs));
+    const v = typeof ruleRead === "function" ? ruleRead({ by: "gm" }, key) : undefined, g = /^global\.(.+)$/.exec(key);
+    return showValue(g ? specs.get("global:" + g[1]) : null, v);
+  });
+}
+// Once a control's change is sent: its rules ("A control is used").
+const usedAfter = (sending, panel, ctl, value) => Promise.resolve(sending).then(() => controlUsed(panel.id, ctl.id, value), () => {});
 // A control's picture: its drawing (live with the Global values it reads, and the Local values of
 // `whose`: [charId, entryUid]), else its built-in icon.
 function controlPicture(ctl, cls, fallback = null, whose = ["", ""]) {
@@ -71,7 +103,57 @@ function pictureWhose(panel, ctl) {
 }
 
 // The pictures a panel's boards use (so exports carry them).
-const panelImages = panel => (panel.controls || []).flatMap(c => [c.board?.image, ...(c.board?.layers || []).map(l => l.image)]).filter(Boolean);
+const panelImages = panel => [panel.bg?.image, ...(panel.controls || []).flatMap(c => [c.bg?.image, c.board?.image, ...(c.board?.layers || []).map(l => l.image)])].filter(Boolean);
+
+// ------------------------------------------------------------------ backgrounds
+// A panel's or a control's background: a picture, or a drawing (live with the values it reads),
+// filling it, fitted in or stretched, with a veil over it (fade) to keep controls readable.
+const BG_KINDS = new Set(["slider", "range", "toggle", "button", "dropdown", "polygon", "text"]); // (a board and a Picture have pictures of their own)
+const hasBg = bg => !!bg && (!!bg.image || !!(bg.iconSvg && bg.iconDoc));
+function bgLayer(bg) {
+  if (!hasBg(bg)) return null;
+  const fit = bg.fit === "contain" || bg.fit === "stretch" ? bg.fit : "cover";
+  let pic;
+  if (bg.image) {
+    pic = storedImage(bg.image, "cp-bg-pic");
+    pic.style.objectFit = fit === "stretch" ? "fill" : fit;
+  } else {
+    pic = controlPicture(bg, "cp-bg-pic");
+    pic?.setAttribute("preserveAspectRatio", fit === "cover" ? "xMidYMid slice" : fit === "stretch" ? "none" : "xMidYMid meet");
+  }
+  return h("div", { class: "cp-bg" + (bg.fade ? ` fade-${bg.fade}` : ""), "aria-hidden": "true" }, pic);
+}
+// Its editor: Picture… / Drawing… / None; then Fit and Fade.
+function bgField(draft, label = "Background") {
+  const box = h("div", { class: "cp-bg-field" });
+  const bg = () => draft.bg ||= {};
+  const draw = () => {
+    const b = draft.bg, on = hasBg(b);
+    setChildren(box,
+      h("div", { class: "inline wrap" },
+        on ? (b.image ? storedImage(b.image, "pic-thumb") : controlPicture(b, "gm-layer-thumb")) : h("span", { class: "gm-bg-blank", title: "None" }),
+        h("button", { type: "button", class: "btn", onclick: () => pickImageFiles(false, async ([file]) => {
+          try { const id = await addImageFile(file); setItemDrawing(bg(), null); bg().image = id; draw(); } catch (e) { toast(e.message); }
+        }) }, icon("image"), "Picture…"),
+        h("button", { type: "button", class: "btn", title: "One of your drawings: it moves with the values it reads (clouds, a tide, a glow)",
+          onclick: () => openIconPicker(null, () => {}, null, { drawings: drawingLibrary(), onDrawing: d => { setItemDrawing(bg(), d); delete bg().image; draw(); } }) },
+          icon("edit"), "Drawing…"),
+        on && h("button", { type: "button", class: "btn", onclick: () => { delete draft.bg; draw(); } }, "None")),
+      on && h("div", { class: "form grid" },
+        h("label", { class: "field" }, h("span", null, "Fit"), h("select", { onchange: e => { if (e.target.value === "cover") delete b.fit; else b.fit = e.target.value; } },
+          [["cover", "Fill it (may crop)"], ["contain", "Fit it all in"], ["stretch", "Stretch to its shape"]].map(([v, t]) => h("option", { value: v, selected: (b.fit || "cover") === v }, t)))),
+        h("label", { class: "field" }, h("span", null, "Fade"), h("select", { onchange: e => { if (+e.target.value) b.fade = +e.target.value; else delete b.fade; } },
+          [[0, "None"], [1, "A little (controls stand out)"], [2, "A lot"]].map(([v, t]) => h("option", { value: v, selected: (b.fade || 0) === v }, t))))));
+  };
+  draw();
+  return h("div", { class: "field" }, h("span", null, label), box);
+}
+// A background as saved: just what it uses.
+function cleanBg(b) {
+  if (!hasBg(b)) return undefined;
+  return { ...(b.image ? { image: b.image } : { iconDoc: b.iconDoc, iconSvg: b.iconSvg, ...(b.iconLib ? { iconLib: b.iconLib } : {}) }),
+    ...(b.fit === "contain" || b.fit === "stretch" ? { fit: b.fit } : {}), ...(b.fade === 1 || b.fade === 2 ? { fade: b.fade } : {}) };
+}
 
 // The value a control shows: as it's set where the control applies, else the value's default.
 const specOfControl = (ctl, specs) => specs.get(`${ctl.scope === "party" ? "global" : "local"}:${ctl.name}`);
@@ -126,7 +208,7 @@ function fitSquare(box, sq) {
 
 // ------------------------------------------------------------------ the range slider
 
-function rangeControl(ctl, specs, label) {
+function rangeControl(ctl, specs, label, panel) {
   const spec = namedSpec(ctl, ctl.name, specs);
   const a0 = ctl.min ?? spec?.min ?? 0, b0 = ctl.max ?? spec?.max ?? 1, step = ctl.step ?? spec?.step;
   const from = Math.min(a0, b0), to = Math.max(a0, b0), span = to - from || 1;
@@ -176,7 +258,7 @@ function rangeControl(ctl, specs, label) {
     previewNamed(ctl, ctl.name, lo);
     previewNamed(ctl, ctl.name2, hi);
     sender.soon();
-  }, () => settle(sender.now()));
+  }, () => usedAfter(settle(sender.now()), panel, ctl, lo));
   // Arrow keys move a handle the way the arrow points.
   const keys = end => ev => {
     const d = { ArrowRight: 1, ArrowUp: 1, ArrowLeft: -1, ArrowDown: -1 }[ev.key];
@@ -185,7 +267,7 @@ function rangeControl(ctl, specs, label) {
     const by = (rev ? -d : d) * (typeof step === "number" && step > 0 ? step : span / 100);
     if (end === "lo") lo = Math.min(snap(lo + by), hi); else hi = Math.max(snap(hi + by), lo);
     place();
-    sender.now();
+    usedAfter(sender.now(), panel, ctl, lo);
   };
   thumbLo.addEventListener("keydown", keys("lo"));
   thumbHi.addEventListener("keydown", keys("hi"));
@@ -287,7 +369,7 @@ function polygonControl(ctl, specs, label, panel) {
     const vals = values();
     verts.forEach((v, i) => previewNamed(ctl, v.name, vals[i]));
     sender.soon();
-  }, () => { settle(sender.now()); keep(); });
+  }, () => { usedAfter(settle(sender.now()), panel, ctl); keep(); });
   sq.addEventListener("keydown", ev => {
     const d = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[ev.key];
     if (!d) return;
@@ -295,7 +377,7 @@ function polygonControl(ctl, specs, label, panel) {
     const by = ev.shiftKey ? 0.1 : 0.02;
     at = clampToPoly(pts, [at[0] + d[0] * by, at[1] + d[1] * by]);
     place();
-    sender.now();
+    usedAfter(sender.now(), panel, ctl);
     keep();
   });
   return box;
@@ -309,7 +391,7 @@ const dropdownOptions = (ctl, spec) => ctl.options?.length ? ctl.options
 function controlLive(ctl, specs, panel) {
   ctl = forChosen(panel, ctl);
   const spec = specOfControl(ctl, specs), v = controlValue(ctl, specs);
-  const label = ctl.label || ctl.name || "";
+  const label = fillWords(ctl, ctl.label, specs) || ctl.name || "";
   // (for whoever is chosen in a Players dropdown: their name after its label)
   const who = ctl.from && ctl.type !== "icon" && ctl.target && gmChars().find(c => c.id === ctl.target)?.name;
   const caption = label && h("span", { class: "cp-label" }, label, who && h("span", { class: "cp-who" }, ` · ${who}`));
@@ -334,43 +416,100 @@ function controlLive(ctl, specs, panel) {
           previewNamed(ctl, ctl.name, latest);
           if (!timer) timer = setTimeout(send, Math.max(0, 150 - (Date.now() - last)));
         },
-        onchange: ev => { latest = +ev.target.value; settle(send()); } });
+        onchange: ev => { latest = +ev.target.value; usedAfter(settle(send()), panel, ctl, latest); } });
       return [caption, h("div", { class: "cp-slider" + (isUpright(ctl) ? " upright" : "") }, range, out)];
     }
     case "range":
-      return [caption, rangeControl(ctl, specs, label)];
+      return [caption, rangeControl(ctl, specs, label, panel)];
     case "polygon":
       return [caption, polygonControl(ctl, specs, label, panel)];
     case "toggle": {
       const on = ctl.on ?? 1, off = ctl.off ?? 0, isOn = v === on;
       return h("button", { type: "button", class: "cp-switch" + (isOn ? " on" : "") + (isUpright(ctl) ? " upright" : "") + (ctl.reverse ? " reverse" : ""),
         role: "switch", "aria-checked": String(isOn),
-        onclick: () => sendControl(ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), h("span", null, label));
+        onclick: () => usedAfter(sendControl(ctl, isOn ? off : on), panel, ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), h("span", null, label));
     }
-    case "button":
-      return h("button", { type: "button", class: "btn cp-btn", title: ctl.name ? `${ctl.action === "add" ? `Adds ${ctl.amount ?? 1} to` : `Sets`} ${ctl.name}${ctl.action === "add" ? "" : ` to ${ctl.amount ?? 1}`}` : "",
-        onclick: () => sendControl(ctl, ctl.action === "add" ? Math.round((v + (ctl.amount ?? 1)) * 1000) / 1000 : ctl.amount ?? 1) },
+    case "button": {
+      // (Just its rules: it sets nothing)
+      const next = ctl.action === "rules" || !ctl.name ? undefined : ctl.action === "add" ? Math.round((v + (ctl.amount ?? 1)) * 1000) / 1000 : ctl.amount ?? 1;
+      return h("button", { type: "button", class: "btn cp-btn",
+        title: next === undefined ? "Runs its rules" : `${ctl.action === "add" ? `Adds ${ctl.amount ?? 1} to` : `Sets`} ${ctl.name}${ctl.action === "add" ? "" : ` to ${ctl.amount ?? 1}`}`,
+        onclick: () => usedAfter(next === undefined ? null : sendControl(ctl, next), panel, ctl, next) },
         controlPicture(ctl, "cp-btn-icon"), label);
+    }
     case "dropdown":
       if (isPlayersDropdown(ctl)) {
         const chars = gmChars(), at = chosenPlayer(panel, ctl);
         return [caption || h("span", { class: "cp-label" }, "Player"), h("select", { class: "cp-select", "aria-label": label || "Player",
-          onchange: ev => { ui.panelPick[`${panel.id}/${ctl.id}`] = ev.target.value; render(); } },
+          onchange: ev => { ui.panelPick[`${panel.id}/${ctl.id}`] = ev.target.value; render(); controlUsed(panel.id, ctl.id); } },
           chars.length ? chars.map(c => h("option", { value: c.id, selected: c.id === at }, c.name)) : h("option", { value: "" }, "No players yet"))];
       }
-      return [caption, h("select", { class: "cp-select", "aria-label": label || "Value", onchange: ev => sendControl(ctl, +ev.target.value) },
+      return [caption, h("select", { class: "cp-select", "aria-label": label || "Value", onchange: ev => usedAfter(sendControl(ctl, +ev.target.value), panel, ctl, +ev.target.value) },
         dropdownOptions(ctl, spec).map(o => h("option", { value: o.value, selected: o.value === v }, o.label)))];
     case "icon":
-      return [controlPicture(ctl, "cp-icon", "question", pictureWhose(panel, ctl)), caption];
+      return [ctl.iconDoc && ctl.iconSvg && drawingIsInteractive(ctl.iconDoc) && isGmDevice() ? touchablePicture(panel, ctl)
+        : controlPicture(ctl, "cp-icon", "question", pictureWhose(panel, ctl)), caption];
     case "board": {
       // Its layers' state on this device, and its groups' members splitting off (kept with it).
-      const opts = { key: `${panel.id}/${ctl.id}`, change: fn => updatePanel(panel.id, p => { const c = findItem(p, ctl.id); if (c?.board) fn(c.board); }) };
+      const opts = { key: `${panel.id}/${ctl.id}`, change: fn => updatePanel(panel.id, p => { const c = findItem(p, ctl.id); if (c?.board) fn(c.board); }),
+        used: () => controlUsed(panel.id, ctl.id) }; // (a pin dropped)
       return [caption, gmBoard(ctl.board || { pins: [] }, opts),
         iconBtn("expand", "Expand: zoom, scroll and layers", () => openBoardZoom(ctl.board || { pins: [] }, ctl.label || "Board", opts), "cp-expand")];
     }
     default: // text: words, and the value it shows (if any)
       return [caption, ctl.name && h("b", { class: "cp-readout" }, showValue(spec, v))];
   }
+}
+
+// A Picture control whose drawing has hotspots, used on the panel (the GM's device, as an item's
+// drawing is in its details: makeIconInteractive). Its gestures set its variables: global_… the
+// Global values, local_… the Local values it shows (Local values of), others while it's on screen;
+// "Run the rules" fires "A control is used" for the hotspot (controlUsed).
+function touchablePicture(panel, ctl) {
+  const whose = pictureWhose(panel, ctl), touch = {};
+  const vars = () => ({ ...iconValueVars(...whose), ...touch });
+  const node = liveDrawnIcon(ctl.iconDoc, ctl.iconSvg, "cp-icon cp-touch", vars);
+  const where = whose[1] ? ["item", `${whose[0]}/${whose[1]}`] : whose[0] ? ["character", whose[0]] : null;
+  let ix = null, sent = 0;
+  const toDoc = (x, y) => { const m = node.getScreenCTM?.(); if (!m) return null; const p = new DOMPoint(x, y).matrixTransform(m.inverse()); return { x: p.x, y: p.y }; };
+  const scale = () => Math.abs(node.getScreenCTM?.()?.a || 1);
+  const changed = (values, done) => {
+    const setNow = done || Date.now() - sent > 300; // (others follow a drag a few times a second)
+    for (const [name, v] of Object.entries(values)) {
+      const g = /^global_([A-Za-z][A-Za-z0-9_]*)$/.exec(name), l = /^(?:local|gm)_([A-Za-z][A-Za-z0-9_]*)$/.exec(name);
+      const at = g ? clockwork.at("party", "", g[1]) : l && where ? clockwork.at(...where, l[1]) : null;
+      if (!at) { touch[name] = v; continue; }
+      if (!done) clockwork.preview(...at, v);
+      if (setNow) clockwork.change(...at, v, "gm");
+    }
+    if (setNow) sent = done ? 0 : Date.now();
+    if (done) clockwork.endPreview();
+    refreshLiveIcons();
+  };
+  node.addEventListener("pointerdown", ev => {
+    if (!ix || !ev.isPrimary) return;
+    const p = toDoc(ev.clientX, ev.clientY);
+    if (!p || !ix.down(p)) return;
+    ev.preventDefault();
+    holdRender(true); // (the panel isn't redrawn under the finger)
+    const id = ev.pointerId;
+    const move = m => { if (m.pointerId !== id) return; const q = toDoc(m.clientX, m.clientY); if (q) ix.move(q); };
+    const up = u => { if (u.pointerId !== id) return; stop(); const q = toDoc(u.clientX, u.clientY); if (q) ix.up(q); else ix.cancel(); };
+    const cancel = c => { if (c.pointerId === id) { stop(); ix.cancel(); } };
+    const stop = () => { removeEventListener("pointermove", move); removeEventListener("pointerup", up); removeEventListener("pointercancel", cancel); setTimeout(() => holdRender(false)); };
+    addEventListener("pointermove", move); addEventListener("pointerup", up); addEventListener("pointercancel", cancel);
+  });
+  loadSvgLay().then(() => {
+    const T = window.SvgLayTool, n = normalizedDrawing(ctl.iconDoc, T.normalizeDocument);
+    const env = () => T.documentEnv(n, { ...iconVariableDefaults(n), ...readVars(vars) });
+    ix = T.createInteraction({ document: () => T.resolveDocument(n, env()), env, onChange: changed,
+      onSound: (sound, volume) => { const f = soundVolume(); if (f > 0) T.playSound(n, sound, volume * f); },
+      onVibrate: ms => { try { navigator.vibrate?.(ms); } catch {} },
+      // (the key is the hotspot's name as svg-lay-tool keeps it: actionKey)
+      onApp: (app, key) => { if (app === "signal") controlUsed(panel.id, ctl.id, undefined, hotspotNames(ctl.iconDoc).find(x => actionKey(x) === key) || key); },
+      slop: () => 8 / scale(), tolerance: () => 14 / scale() });
+  }).catch(() => {});
+  return node;
 }
 
 // ------------------------------------------------------------------ Tabs controls
@@ -495,17 +634,28 @@ function panelGrid(panel, editing) {
       grid.append(cell);
     }
   }
-  for (const item of panelItems(panel)) if (showing(panel, item, index)) grid.append(controlCell(panel, item, specs, editing, grid));
+  for (const item of panelItems(panel)) if (showing(panel, item, index)) { const cell = controlCell(panel, item, specs, editing, grid); if (cell) grid.append(cell); }
+  // Its background: behind the grid's cells, the size of the grid.
+  const bg = bgLayer(panel.bg);
+  if (bg) { grid.classList.add("has-bg"); grid.prepend(bg); }
   return h("div", { class: "cp-wrap" }, grid);
 }
 
 function controlCell(panel, ctl, specs, editing, grid) {
   const tabs = isTabs(ctl);
-  const el = h("div", { class: `cp-cell cp-type-${ctl.type}` + (ctl.color ? " coloured" : "") });
+  const bg = BG_KINDS.has(ctl.type) ? bgLayer(ctl.bg) : null;
+  const el = h("div", { class: `cp-cell cp-type-${ctl.type}` + (ctl.color ? " coloured" : "") + (bg ? " has-bg" : "") }, bg);
   placeCell(el, ctl);
   if (ctl.color) el.style.setProperty("--cp", ctl.color);
   const live = () => tabs ? tabsLive(panel, ctl) : controlLive(ctl, specs, panel);
-  if (!editing) { el.append(...[live()].flat().filter(Boolean)); return el; }
+  // Hidden (showIf) or locked (lockIf): gone in Play mode; faded and marked in Edit mode, to arrange.
+  const hidden = !controlShown(ctl), locked = controlLocked(ctl);
+  if (hidden && !editing && playMode()) return null;
+  el.classList.toggle("cp-hidden", hidden);
+  el.classList.toggle("cp-locked", locked);
+  const flag = (hidden || locked) && h("span", { class: "cp-flag", title: hidden ? "Hidden now: its Shown when doesn't hold (only Edit mode shows it)" : "Locked now: its Locked when holds" },
+    icon(hidden ? "eye-off" : "lock"));
+  if (!editing) { el.append(...[locked ? h("div", { class: "cp-inert", inert: true }, live()) : live()].flat().filter(Boolean), flag || []); return el; }
 
   // Arranging: drag it to move, drag its corner to resize (or arrow keys; Shift+arrows resize).
   // A Tabs control's tabs still work, to arrange each tab in turn.
@@ -562,7 +712,7 @@ function controlCell(panel, ctl, specs, editing, grid) {
   }
   el.classList.add("arranging");
   el.classList.toggle("clash", bad(ctl)); // e.g. moved here when a tab was removed
-  el.append(body, handle, grip,
+  el.append(body, handle, grip, flag || [],
     iconBtn("edit", tabs ? "Edit these tabs" : "Edit this control", () => editPanelControl(panel, ctl), "cp-edit"));
   return el;
 }
@@ -571,17 +721,25 @@ function controlCell(panel, ctl, specs, editing, grid) {
 
 function controlPanelCard(panel) {
   const key = "gmc:" + panel.id, closed = ui.collapsed.has(key), editing = ui.panelEdit === panel.id;
+  const hidden = !controlShown(panel);
+  if (hidden && playMode()) return null;
   const toggle = () => { closed ? ui.collapsed.delete(key) : ui.collapsed.add(key); render(); };
   const where = tabsHereWords(panel);
-  return h("div", { class: "group gm-control-card cp-card" },
+  return h("div", { class: "group gm-control-card cp-card" + (hidden ? " cp-hidden" : "") },
     h("div", { class: "group-head" },
       h("button", { class: "collapse" + (closed ? " closed" : ""), "aria-expanded": String(!closed), onclick: toggle }, icon("chevron"), h("h3", null, panel.name)),
+      hidden && h("span", { class: "tag", title: "Its Shown when doesn't hold: Play mode hides it" }, "hidden now"),
       h("span", { class: "muted small" }, plural(panel.controls.length, "control")),
       !closed && (editing || canEditNow()) && h("button", { class: "btn" + (editing ? " primary" : ""), onclick: () => { ui.panelEdit = editing ? null : panel.id; render(); } },
         icon(editing ? "check" : "grid"), editing ? "Done" : "Arrange"),
       canEditNow() && iconBtn("edit", `Edit ${panel.name}`, () => editControlPanel(panel)),
-      iconBtn("trash", `Delete ${panel.name}`, () => confirmDialog(`Delete the panel “${panel.name}”? The values it set keep their values.`, "Delete",
-        () => commit(s => { s.gmControls = s.gmControls.filter(c => c.id !== panel.id); }, `Deleted ${panel.name}`, true)), "danger-hover")),
+      iconBtn("trash", `Delete ${panel.name}`, () => {
+        const rules = rulesForGone(r => r.appliesTo?.panel === panel.id);
+        confirmDialog(`Delete the panel “${panel.name}”? The values it set keep their values.${rules ? ` Its ${plural(rules, "rule")} (A control is used) go too.` : ""}`, "Delete", () => {
+          commit(s => { s.gmControls = s.gmControls.filter(c => c.id !== panel.id); }, `Deleted ${panel.name}`, true);
+          if (rules) saveRuleBook(list => list.filter(r => r.appliesTo?.panel !== panel.id), null);
+        });
+      }, "danger-hover")),
     !closed && [
       editing && h("div", { class: "cp-arrange-bar" },
         h("p", { class: "muted small" }, "Click + to add a control (Tabs splits the panel into tabs). Drag a control to move it, or its corner to resize it; or select it and use the arrow keys (Shift to resize). The pencil edits it.",
@@ -592,27 +750,70 @@ function controlPanelCard(panel) {
 
 // ------------------------------------------------------------------ making and editing
 
+// How many of the rule book's rules a removed panel or control takes with it.
+const rulesForGone = fn => (store.campaign()?.rules || []).filter(r => r && fn(r)).length;
+
+// A condition field (Shown when, Locked when): none, or one condition as a rule's pills.
+function condField(draft, key, label, none, add, help) {
+  const box = h("div", { class: "rule-blocks cp-cond" });
+  const firstGlobal = () => [...knownValues().values()].find(v => v.scope === "global")?.name || "door";
+  const draw = () => setChildren(box, draft[key]
+    ? h("div", { class: "rblk rblk-if" }, h("div", { class: "rblk-line" }, condPills(draft[key], draw, label),
+        h("button", { type: "button", class: "rblk-x", "aria-label": `${label}: none`, onclick: () => { delete draft[key]; draw(); } }, "×")))
+    : h("div", { class: "inline" }, h("span", { class: "muted" }, none),
+        h("button", { type: "button", class: "btn", onclick: () => { draft[key] = { value: "global." + firstGlobal(), op: "=", to: 1 }; draw(); } }, icon("plus"), add)));
+  draw();
+  return h("div", { class: "field" }, h("span", null, label), box, h("small", { class: "muted" }, help));
+}
+
+// A control's rules (kept in the rule book: "A control is used", applying to it or its panel).
+function controlRules(panel, ctl) {
+  const box = h("div", { class: "field cp-rules" });
+  const mine = () => (store.campaign()?.rules || []).map(ruleOf).filter(Boolean)
+    .filter(r => r.appliesTo?.panel === panel.id && (!r.appliesTo.control || r.appliesTo.control === ctl.id));
+  const draw = () => setChildren(box, h("span", null, "Rules"),
+    !clockworkOn() && h("p", { class: "muted small" }, "Rules, values and controls are off for this campaign."),
+    mine().map(r => h("button", { type: "button", class: "rule-card", onclick: () => openRuleEditor(r, null, draw) },
+      h("span", { class: "rule-card-words" }, r.name && h("b", null, r.name + ": "), ruleWords(r)),
+      h("span", { class: "chips" }, h("span", { class: "chip scope" }, r.appliesTo.control ? "This control" : `Every control on ${panel.name}`)))),
+    h("button", { type: "button", class: "rule-add-block", onclick: () => openRuleEditor(null,
+      { when: "control", appliesTo: { panel: panel.id, control: ctl.id }, do: [{ message: "" }] }, draw) }, "+ New rule for this control"),
+    h("small", { class: "muted" }, "What happens when it's used: pressed, switched, let go, chosen, a pin dropped, a hotspot touched. They're in the rule book (GM → Controls → Rules) too."));
+  draw();
+  return box;
+}
+
 function editControlPanel(panel) {
   const isNew = !panel;
-  const draft = panel ? { name: panel.name, cols: panel.cols, rows: panel.rows } : { name: "", cols: 6, rows: 4 };
+  const draft = panel ? { name: panel.name, cols: panel.cols, rows: panel.rows, ...(panel.showIf ? { showIf: clone(panel.showIf) } : {}), ...(panel.bg ? { bg: clone(panel.bg) } : {}) }
+    : { name: "", cols: 6, rows: 4 };
   let close;
   const num = (key, label, min, max) => h("label", { class: "field" }, h("span", null, label),
     h("input", { type: "number", min, max, step: 1, value: draft[key], onchange: e => { draft[key] = Math.max(min, Math.min(max, Math.round(+e.target.value || min))); e.target.value = draft[key]; } }));
   const save = () => {
     const name = draft.name.trim() || "Panel";
     if (panel && panelItems(panel).some(c => !fitsPanel(draft, c))) return toast("Some controls or tabs would be outside the grid: move or remove them first");
+    if (draft.showIf && !clockwork.find(draft.showIf.value)) return toast("Shown when: choose a value (global.door, char.local.luck…)");
     close();
     if (isNew) {
-      const p = { id: "gc" + uid(), kind: "panel", name, cols: draft.cols, rows: draft.rows, controls: [] };
+      const p = { id: "gc" + uid(), kind: "panel", name, cols: draft.cols, rows: draft.rows, controls: [], ...(draft.showIf ? { showIf: draft.showIf } : {}),
+        ...(cleanBg(draft.bg) ? { bg: cleanBg(draft.bg) } : {}) };
       ui.panelEdit = p.id;
       commit(s => { s.gmControls = [...(s.gmControls || []), p]; }, `Made ${name}`);
-    } else updatePanel(panel.id, p => Object.assign(p, { name, cols: draft.cols, rows: draft.rows }), `Saved ${name}`);
+    } else updatePanel(panel.id, p => {
+      Object.assign(p, { name, cols: draft.cols, rows: draft.rows });
+      if (draft.showIf) p.showIf = draft.showIf; else delete p.showIf;
+      const bg = cleanBg(draft.bg);
+      if (bg) p.bg = bg; else delete p.bg;
+    }, `Saved ${name}`);
   };
   close = openModal(isNew ? "New panel" : `Edit ${panel.name}`, h("div", { class: "form" },
     h("label", { class: "field" }, h("span", null, "Name"),
       h("input", { type: "text", value: draft.name, maxlength: 60, placeholder: "e.g. Ship's helm, Weather, Doom clock", oninput: e => { draft.name = e.target.value; } })),
     h("div", { class: "form grid" }, num("cols", "Columns", 1, 12), num("rows", "Rows", 1, 24)),
-    h("p", { class: "muted small" }, "A grid for your controls: sliders, range sliders, switches, buttons, dropdowns, polygons, boards, pictures and text. Each sets a Global value or a player's or item's Local value.")),
+    h("p", { class: "muted small" }, "A grid for your controls: sliders, range sliders, switches, buttons, dropdowns, polygons, boards, pictures and text. Each sets a Global value or a player's or item's Local value."),
+    bgField(draft, "Background (behind its controls)"),
+    condField(draft, "showIf", "Shown when", "Always shown", "Only while…", "Hidden while it doesn't hold (Edit mode still shows it, marked). A rule shows it by setting the value.")),
   { footer: [h("button", { class: "btn", onclick: () => close() }, "Cancel"), h("button", { class: "btn primary", onclick: save }, icon("check"), isNew ? "Make it" : "Save")] });
 }
 
@@ -688,15 +889,15 @@ function editPanelControl(panel, ctl, at) {
           drawBox();
         }, null, { drawings: drawingLibrary(), onDrawing: d => { setItemDrawing(draft, d); drawBox(); } }) }, icon("image"), "Choose…"),
         h("button", { type: "button", class: "btn", onclick: () => {
-          if (draft.iconDoc) return editItemDrawing(draft, drawBox, { name: name(), self: ctl });
-          openIconDrawer({ name: name(), color: draft.color, templates: true, buttons: null }, (doc, svg) => {
+          if (draft.iconDoc) return editItemDrawing(draft, drawBox, { name: name(), self: ctl, panelPicture: draft.type === "icon" });
+          openIconDrawer({ name: name(), color: draft.color, templates: true, buttons: null, panelPicture: draft.type === "icon" }, (doc, svg) => {
             if (doc) setItemDrawing(draft, addDrawing(name(), doc, svg));
             drawBox();
           });
         } }, icon("edit"), draft.iconDoc ? "Edit drawing…" : "Draw…"),
         has && h("button", { type: "button", class: "btn", onclick: () => { delete draft.icon; setItemDrawing(draft, null); drawBox(); } }, "None"),
         draft.type === "icon" && h("small", { class: "muted", style: "flex-basis: 100%" },
-          "A drawing that reads Global values (global_…) moves with them: a weather vane, a tide gauge, a clock."));
+          "A drawing that reads Global values (global_…) moves with them: a weather vane, a tide gauge, a clock. One with hotspots can be used on the panel: its hotspots set its values and can run its rules (below)."));
     };
     drawBox();
     return h("div", { class: "field" }, h("span", null, draft.type === "icon" ? "Picture" : "Icon"), box);
@@ -721,6 +922,7 @@ function editPanelControl(panel, ctl, at) {
       h("datalist", { id: listId }, [...new Set([...specs.values()].map(v => v.name))].sort().map(n => h("option", { value: n })))];
   };
   const valueFields = () => [nameField("name", draft.type === "text" ? "Shows the value (optional)" : "Sets the value"), forField()];
+  const rulesOnly = () => draft.type === "button" && draft.action === "rules";
   const players = () => isPlayersDropdown(draft);
   // A dropdown lists the value's choices (and sets it), or the party's players (whose values other controls use).
   const listsField = () => h("div", { class: "field" }, h("span", null, "Lists"),
@@ -824,7 +1026,8 @@ function editPanelControl(panel, ctl, at) {
       slideSwitch("Handles", [["slider", "One: a value"], ["range", "Two: a lower and an upper value"]], draft.type, v => { draft.type = v; drawFields(); }, { even: true, cls: "seg-field" })),
     text("label", draft.type === "text" ? "Text" : "Label", draft.type === "icon" ? "Optional" : ""),
     draft.type === "dropdown" && listsField(),
-    ((SETS_VALUE.has(draft.type) && !players()) || draft.type === "text") && valueFields(),
+    ((SETS_VALUE.has(draft.type) && !players() && !rulesOnly()) || draft.type === "text") && valueFields(),
+    draft.type === "text" && h("small", { class: "muted field" }, "Its text can show values too, in braces: The door is {door}, The storm is {global.storm}."),
     draft.type === "range" && [nameField("name", "Sets the lower value"), nameField("name2", "Sets the upper value"), forField()],
     draft.type === "polygon" && [(draft.vertices = draft.vertices?.length >= 3 ? draft.vertices : [{ label: "", name: "" }, { label: "", name: "" }, { label: "", name: "" }], cornersEditor()), forField()],
     (draft.type === "slider" || draft.type === "range") && h("div", { class: "form grid" }, num("min", "From", "the value's own"), num("max", "To", "the value's own"), num("step", "Step", "any")),
@@ -836,9 +1039,11 @@ function editPanelControl(panel, ctl, at) {
         h("option", { value: "1", selected: !!draft.reverse }, "The left, or the bottom when upright")),
       h("small", { class: "muted" }, "Make it taller than it's wide (in Arrange, drag its corner) and it stands upright.")),
     draft.type === "button" && [
-      h("label", { class: "field" }, h("span", null, "When pressed"), h("select", { onchange: e => { draft.action = e.target.value; } },
-        h("option", { value: "set", selected: draft.action !== "add" }, "Set the value to"), h("option", { value: "add", selected: draft.action === "add" }, "Add to the value (negative takes away)"))),
-      num("amount", "Amount", "1")],
+      h("label", { class: "field" }, h("span", null, "When pressed"), h("select", { onchange: e => { draft.action = e.target.value; drawFields(); } },
+        h("option", { value: "set", selected: draft.action !== "add" && draft.action !== "rules" }, "Set the value to"),
+        h("option", { value: "add", selected: draft.action === "add" }, "Add to the value (negative takes away)"),
+        h("option", { value: "rules", selected: draft.action === "rules" }, "Nothing: just its rules"))),
+      !rulesOnly() && num("amount", "Amount", "1")],
     draft.type === "dropdown" && !players() && choicesEditor(rows),
     draft.type === "board" && h("div", { class: "field" }, h("span", null, "Picture and pins"),
       h("div", { class: "inline wrap" },
@@ -849,9 +1054,13 @@ function editPanelControl(panel, ctl, at) {
     draft.type === "icon" && whoseField(),
     draft.type === "tabs" && tabsEditor(),
     whereFields(),
+    BG_KINDS.has(draft.type) && bgField(draft),
     h("label", { class: "field" }, h("span", null, "Colour (its edge, background and highlights)"), h("div", { class: "inline" },
       h("input", { type: "color", value: draft.color || "#888888", onchange: e => { draft.color = e.target.value; } }),
-      draft.color && h("button", { type: "button", class: "btn", onclick: () => { delete draft.color; drawFields(); } }, "Default"))));
+      draft.color && h("button", { type: "button", class: "btn", onclick: () => { delete draft.color; drawFields(); } }, "Default"))),
+    condField(draft, "showIf", "Shown when", "Always shown", "Only while…", "Hidden while it doesn't hold (Edit mode still shows it, faded). A rule shows it by setting the value."),
+    condField(draft, "lockIf", "Locked when", "Never locked", "Locked while…", "It can't be used while it holds. A rule locks or unlocks it by setting the value."),
+    !isNew && draft.type !== "tabs" && controlRules(panel, draft));
   drawFields();
 
   const save = () => {
@@ -864,7 +1073,14 @@ function editPanelControl(panel, ctl, at) {
     }
     if (draft.type === "board") draft.board = draft.board || { pins: [] };
     else delete draft.board;
-    if (SETS_VALUE.has(draft.type) && !players() && !isValueName(draft.name)) return toast("Choose the value it sets: a letter, then letters, digits or _");
+    for (const [k, what] of [["showIf", "Shown when"], ["lockIf", "Locked when"]]) {
+      if (!draft[k]) continue;
+      if (!clockwork.find(draft[k].value)) return toast(`${what}: choose a value (global.door, char.local.luck…)`);
+      if (draft[k].to === "" || draft[k].to == null) return toast(`${what}: what it's compared with`);
+    }
+    if (rulesOnly()) { delete draft.name; delete draft.amount; }
+    else if (draft.type === "button" && draft.action !== "add") delete draft.action;
+    if (SETS_VALUE.has(draft.type) && !players() && !rulesOnly() && !isValueName(draft.name)) return toast("Choose the value it sets: a letter, then letters, digits or _");
     if (draft.type === "text" && draft.name && !isValueName(draft.name)) return toast("Not a value name");
     if (draft.type === "range" && (!isValueName(draft.name) || !isValueName(draft.name2))) return toast("Choose the two values it sets: a letter, then letters, digits or _");
     if (draft.type === "range" && draft.name === draft.name2) return toast("The lower and upper values need different names");
@@ -873,6 +1089,9 @@ function editPanelControl(panel, ctl, at) {
       if (new Set(draft.vertices.map(v => v.name)).size < draft.vertices.length) return toast("Each corner needs a value of its own");
     }
     if (!SETS_VALUE.has(draft.type) && draft.type !== "text" && draft.type !== "range") delete draft.name;
+    if (draft.type !== "button") delete draft.action;
+    draft.bg = BG_KINDS.has(draft.type) ? cleanBg(draft.bg) : undefined;
+    if (!draft.bg) delete draft.bg;
     if (draft.type !== "range") delete draft.name2;
     if (draft.type !== "polygon") { delete draft.vertices; delete draft.at; }
     if (draft.type === "tabs" || draft.type === "board" || players()) delete draft.from;
@@ -905,11 +1124,13 @@ function editPanelControl(panel, ctl, at) {
   };
   const remove = () => {
     close();
+    const rules = rulesForGone(r => r.appliesTo?.control === draft.id);
     updatePanel(panel.id, p => {
       const before = tabIndex(p);
       p.controls = p.controls.filter(c => c.id !== draft.id);
       if (isTabs(ctl)) rehomeControls(p, before);
-    }, "Removed the control");
+    }, rules ? `Removed the control and its ${plural(rules, "rule")}` : "Removed the control");
+    if (rules) saveRuleBook(list => list.filter(r => r.appliesTo?.control !== draft.id), null);
   };
   close = openModal(isNew ? "New control" : "Edit control", fields, { footer: [
     !isNew && h("button", { class: "btn danger", onclick: remove }, icon("trash"), "Remove"),
