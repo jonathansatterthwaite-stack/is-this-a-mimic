@@ -78,12 +78,19 @@ const ICONS = {
   layers: '<path d="M12 3 2 8l10 5 10-5z"/><path d="m2 13 10 5 10-5"/>',
 };
 
+// (Each made once, then copied: there are a few for every row drawn.)
+const iconMade = new Map();
 function icon(name, cls = "") {
-  const s = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-  s.setAttribute("viewBox", "0 0 24 24");
+  let made = iconMade.get(name);
+  if (!made) {
+    made = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    made.setAttribute("viewBox", "0 0 24 24");
+    made.setAttribute("aria-hidden", "true");
+    made.innerHTML = ICONS[name];
+    iconMade.set(name, made);
+  }
+  const s = made.cloneNode(true);
   s.setAttribute("class", "icon " + cls);
-  s.setAttribute("aria-hidden", "true");
-  s.innerHTML = ICONS[name];
   return s;
 }
 
@@ -549,8 +556,13 @@ function drawModeSwitch() {
     const opt = (k, ic, label) => [k, [icon(ic), h("span", { class: "mode-word" }, label)], label + " mode"];
     slot.replaceChildren(slideSwitch("Mode", [opt("play", "dice", "Play"), opt("edit", "edit", "Edit")], ui.mode, setAppMode, { even: true, cls: "seg-small" }));
   }
-  fitModeSwitch();
+  // Fitted again only when what's in the bar changes (its size changing: the ResizeObserver), as
+  // measuring makes the browser lay out the whole page, a long list and all.
+  const bar = slot.closest(".topbar");
+  const key = [ui.mode, innerWidth, bar.textContent, bar.querySelectorAll("[hidden]").length].join("|");
+  if (key !== modeSwitchKey) { modeSwitchKey = key; fitModeSwitch(); }
 }
+let modeSwitchKey = null;
 function fitModeSwitch() {
   const slot = document.getElementById("mode-switch"), bar = slot?.closest(".topbar");
   if (!slot || !bar) return;
@@ -619,7 +631,6 @@ function render() {
   const joining = party.active && !party.linked().length && !party.isGm() && !party.isHost();
   if (!viewVisible(ui.view)) ui.view = isGmDevice() && viewVisible("gm") ? "gm" : Object.keys(VIEWS).find(viewVisible);
   // A GM who plays no character is just the GM.
-  drawModeSwitch();
   document.getElementById("char-name").textContent = joining ? "Join the party"
     : isGmDevice() && !gmHasCharacters() && ui.view !== "inventory" ? termCap("gameMaster") : char ? char.name : "";
   document.getElementById("campaign-name").textContent = store.campaign().name;
@@ -632,6 +643,7 @@ function render() {
     const badge = b.querySelector(".badge");
     if (badge) { badge.textContent = offers; badge.hidden = !offers; }
   });
+  drawModeSwitch(); // (once the bar has its names and tabs)
   const main = document.getElementById("view");
   const scroll = window.scrollY;
   tileObserver?.disconnect(); // the grids being replaced; new ones observe themselves
@@ -1797,51 +1809,42 @@ function drawingIsInteractive(doc) {
 
 // What a drawing's hotspots can ask the app to do with its item (the editor offers them; see
 // appAction for what each does, checked as if the player did it by hand).
-function iconAppActions() {
+// The actions (button names) an item being edited has: its own "used" rules, else a set's two.
+function itemButtonNames(it) {
+  const own = rulesOf(it).filter(r => r.when === "used").map(r => r.button);
+  if (own.length || !deckList(it, it.id)) return [...new Set(own)];
+  return [pieceNoun(it) === "card" ? "Draw a card" : "Take one at random", "Take all out"];
+}
+// What a hotspot can ask of the item: its rules for this hotspot (When a hotspot is used), or one of
+// its actions (its buttons). doc: the drawing as it is now (its hotspots); buttons: the item's.
+const hotspotNames = doc => {
+  const out = [], walk = layers => { for (const l of layers || []) { if (l.hotspot) out.push(l.name || "Hotspot"); if (l.type === "group") walk(l.children); } };
+  walk(doc?.layers);
+  return [...new Set(out)];
+};
+// (a drawing keeps an action's key as letters, digits, - and _: a name is kept as such, "Draw-a-card",
+// and matched back by the same form)
+const actionKey = s => String(s || "").trim().replace(/[^A-Za-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+function iconAppActions(doc, buttons = []) {
+  const names = hotspotNames(doc);
   return [
-    { app: "state", label: "Switch a state", hint: "Turns one of the item's states on or off (as the player could: limits and locks apply).",
-      key: { label: "State", options: systemStates().map(s => ({ value: s.key, label: s.label })) },
-      value: { label: "On when", default: "1", placeholder: "on when not 0, e.g. 1 - local_lit" } },
-    { app: "useOne", label: "Use one", hint: "The item's count goes down by one (where it counts in Play mode); the last one goes." },
-    { app: "addOne", label: "Add one", hint: "The item's count goes up by one (where it counts in Play mode)." },
-    { app: "charge", label: "Use charges", hint: "For an item with charges: uses some (a negative number gets them back).",
-      value: { label: "How many", default: "1" } },
-    { app: "draw", label: "Draw a piece", hint: "For a set (a deck of cards): draws one, as Draw a card does." },
-    { app: "details", label: "Show its details", hint: "Turns the picture back into the item's details." },
-  ].filter(a => a.app !== "state" || a.key.options.length);
+    names.length && { app: "signal", label: "Run the item's rules", hint: "Runs the item's rules for this hotspot (Rules tab: When a hotspot is used). Name the hotspot's layer to tell them apart.",
+      key: { label: "Hotspot", options: names.map(n => ({ value: actionKey(n), label: n })) } },
+    buttons.length && { app: "press", label: "Use one of the item's actions", hint: "As its button does (Rules tab: When it's used).",
+      key: { label: "Action", options: buttons.map(b => ({ value: actionKey(b), label: b })) } },
+  ].filter(Boolean);
 }
 
-// An app action from a drawing's hotspot, for one of this device's inventory items: done as the
-// player would do it by hand (or the GM, on the GM's device), with the same checks.
-function appAction(panel, entryUid, app, key, value) {
+// A drawing's hotspot asking the item (one of this device's inventory items): its rules for that
+// hotspot, or one of its actions, as a press (js/triggers.js: pressAction).
+function appAction(panel, entryUid, app, key) {
   const char = store.char(), e = char?.items.find(i => i.uid === entryUid);
-  if (!e) return;
-  const by = isGmDevice() ? "gm" : "player";
-  switch (app) {
-    case "state":
-      if (!statesFor(e).some(s => s.key === key)) return;
-      if (by === "gm") clockwork.change({ char, entry: e }, `item.state.${key}`, value ? 1 : 0, "gm");
-      else if (!playerSetState(e.uid, key, !!value)) toast(`You can't change ${systemStates().find(s => s.key === key)?.label || key} now`);
-      return;
-    case "useOne":
-    case "addOne":
-      if (!canCount(e)) return toast("In Play mode only things like ammunition, rations and potions are counted");
-      return setEntryQty(e, e.qty + (app === "addOne" ? 1 : -1));
-    case "charge": {
-      const it = currentItem(e, char);
-      if (!hasFeature(it, "charges", e.srcId) || !it.maxCharges) return;
-      const now = e.charges ?? it.maxCharges, next = Math.max(0, Math.min(it.maxCharges, now - (value ?? 1)));
-      if (next !== now) clockwork.change({ char, entry: e }, "item.charges", next, by);
-      return;
-    }
-    case "draw":
-      if (!isDeckEntry(e)) return toast("Only a set (a deck of cards) can be drawn from");
-      if (!cardsIn(char, e).length) return toast("There's nothing left to draw");
-      return openDraw(e.uid, 1);
-    case "details":
-      if (panel.classList.contains("icon-focus")) panel.querySelector(".icon-focus-switch input")?.click();
-      return;
-  }
+  if (!e || typeof key !== "string" || !key) return;
+  // The rule's own words for the key (it's kept as actionKey of them).
+  const named = entryRules(char, e).map(r => app === "signal" ? r.when === "signal" && r.signal : r.when === "used" && r.button).find(n => n && actionKey(n) === key);
+  if (!named) return;
+  if (app === "signal") pressAction(entryUid, named, { panel }, "signal");
+  else if (app === "press") pressAction(entryUid, named, { panel });
 }
 
 // The Sounds setting (This device): how loud interactive drawings' sounds play.
@@ -2221,7 +2224,8 @@ function openEntry(entryUid, opts = {}) {
   const footer = [
     !e.purse && h("button", { class: "btn danger", onclick: () => confirmRemoveEntry(e.uid, () => close()) }, icon("trash"), discarding(char) ? "Discard" : "Remove"),
     planner && h("button", { class: "btn primary", onclick: unpack }, icon("package"), "Unpack"),
-    ...itemActions(it).map((a, i) => h("button", { class: "btn", onclick: () => { close(); runItemAction(e.uid, i); } }, icon(a.effect === "fill" ? "plus" : a.effect === "random" ? "dice" : "bag"), a.label)),
+    // Its actions: its "used" rules' buttons (js/triggers.js).
+    ...itemButtons(char, e).map(b => h("button", { class: "btn", onclick: () => { close(); pressAction(e.uid, b.label); } }, icon(buttonIcon(b.rule)), b.label)),
     party.active && h("button", { class: "btn", onclick: () => { close(); openShowItem(e.uid); } }, icon("eye"), "Show"),
     !e.purse && h("button", { class: "btn", onclick: () => { close(); openSell(e.uid); } }, icon("coins"), "Sell"),
     // Player mode: no editing items (a copy can still be renamed with its display name).
@@ -2532,68 +2536,6 @@ function compartmentsField(f, draft) {
   return h("div", { class: "field full" }, box);
 }
 
-// A container's actions (item.actions, see itemActions in js/store.js): its own words for each,
-// what it does, and a state it then switches.
-function actionsField(f, draft) {
-  const list = clone(itemActions(draft));
-  const box = h("div", { class: "actions-rows" });
-  // (none at all is kept as none: a set would otherwise get its defaults back)
-  const save = () => { draft.actions = list.length ? list : deckList(draft, draft.id) ? [] : undefined; };
-  const draw = () => setChildren(box,
-    h("span", null, f.label),
-    list.map((a, i) => h("div", { class: "action-row" },
-      h("input", { type: "text", maxlength: 40, value: a.label, placeholder: "Shake one out", "aria-label": `Action ${i + 1}: words`, oninput: e => { a.label = e.target.value; save(); } }),
-      h("select", { "aria-label": `Action ${i + 1}: what it does`, onchange: e => { a.effect = e.target.value; save(); } },
-        CONTAINER_EFFECTS.map(([k, l]) => h("option", { value: k, selected: a.effect === k }, l))),
-      h("select", { "aria-label": `Action ${i + 1}: then`, onchange: e => { const [st, on] = e.target.value.split(":"); if (st) { a.state = st; a.on = on === "on"; } else { delete a.state; delete a.on; } save(); } },
-        h("option", { value: "" }, "Then nothing more"),
-        systemStates().flatMap(st => [["on", `then ${st.label} on`], ["off", `then ${st.label} off`]].map(([v, l]) =>
-          h("option", { value: `${st.key}:${v}`, selected: a.state === st.key && (a.on !== false) === (v === "on") }, l)))),
-      iconBtn("trash", "Remove this action", () => { list.splice(i, 1); save(); draw(); }, "danger-hover"))),
-    h("button", { type: "button", class: "btn", onclick: () => { list.push({ label: "", effect: "random" }); save(); draw(); } }, icon("plus"), "Add an action"),
-    h("small", { class: "muted" }, "Your words, in its menu: \u201cShake one out\u201d, \u201cFish one out\u201d or \u201cDraw a card\u201d (one at random); \u201cSmash it\u201d (everything out, then Broken on)."));
-  draw();
-  return h("div", { class: "field full" }, box);
-}
-
-// Do one of an inventory item's actions (by its place in the list).
-function runItemAction(entryUid, index) {
-  const char = store.char(), e = char?.items.find(x => x.uid === entryUid);
-  const a = e && itemActions(currentItem(e, char))[index];
-  if (!a) return;
-  const then = c => { if (a.state) { const x = c.items.find(i => i.uid === e.uid); if (x) setState(x, a.state, a.on !== false); } };
-  const named = x => `${entryName(x)}${x.qty > 1 ? ` ×${x.qty}` : ""}`;
-  const inside = takeable(char, e);
-  if (a.effect === "fill") {
-    // What can go in: what's carried (not in it already) that it allows.
-    const fits = char.items.filter(x => x.uid !== e.uid && x.parent !== e.uid && !inDeck(char, x) && !isDescendant(char, x.uid, e.uid) && !isDescendant(char, e.uid, x.uid) && containerAllows(e, x.item, x.srcId));
-    if (!fits.length) return toast(`Nothing you carry goes in the ${entryName(e)}`);
-    let close;
-    close = openModal(a.label, h("div", { class: "group move-to" }, fits.map(x => h("button", { type: "button", class: "row row-main switch",
-      onclick: () => { close(); moveEntry(x.uid, e.uid, false); if (a.state) commit((s, c) => then(c)); } }, itemIcon(currentItem(x, char), "row-icon"), h("div", { class: "row-title" }, named(x))))));
-    return;
-  }
-  if (!inside.length) return toast(`The ${entryName(e)} is empty`);
-  // A set's piece at random: its draw window (to see what came out, and put it back or keep it).
-  if (a.effect === "random" && isDeckEntry(e)) { openDraw(e.uid); if (a.state) commit((s, c) => then(c)); return; }
-  if (a.effect === "choose") {
-    let close;
-    close = openModal(a.label, h("div", { class: "group move-to" }, inside.map(x => h("button", { type: "button", class: "row row-main switch",
-      onclick: () => { close(); commit((s, c) => { const holder = c.items.find(i => i.uid === e.uid), y = c.items.find(i => i.uid === x.uid); if (holder && y) takeOutOf(c, holder, y, 1); then(c); }, `${a.label}: ${entryName(x)}`); } },
-      sealedHere(e) ? h("div", { class: "row-title" }, "Something") : [itemIcon(currentItem(x, char), "row-icon"), h("div", { class: "row-title" }, named(x))]))));
-    return;
-  }
-  let got = [];
-  commit((s, c) => {
-    const holder = c.items.find(i => i.uid === e.uid);
-    if (!holder) return;
-    if (a.effect === "random") { const x = takeRandom(c, holder); if (x) got.push(entryName(x)); }
-    else for (const x of takeable(c, holder)) { got.push(named(x)); takeOutOf(c, holder, x); }
-    then(c);
-  }, null, true);
-  toast(`${a.label}: ${got.join(", ") || "nothing"}`, null);
-}
-
 // ------------------------------------------------------------------ catalog view
 
 const CATALOG_TABS = [["items", "Items"], ["mine", "My items"], ["drawings", "Drawings"], ["templates", "Templates"]];
@@ -2740,7 +2682,7 @@ function takeCards(deckUid, cardUids, msg) {
   }, msg, true);
 }
 
-function putCardsBack(deckUid, cardUids, msg) {
+function putPiecesBack(deckUid, cardUids, msg) {
   commit((s, c) => {
     if (!c.items.some(x => x.uid === deckUid)) return;
     for (const x of c.items) if (cardUids.includes(x.uid)) { placeEntry(x, deckUid); x.equipped = false; }
@@ -2848,9 +2790,9 @@ function deckSection(deck, reopen, closeDetails) {
     h("div", { class: "section-head" }, h("h4", null, `${nouns[0].toUpperCase() + nouns.slice(1)} — ${plural(inside.length, noun)} in the ${name.toLowerCase()}`)),
     h("div", { class: "inline wrap deck-actions" },
       // Its actions (its own words: "Draw a card", "Take all out"…).
-      inside.length > 0 && itemActions(currentItem(deck, char)).filter(a => a.effect !== "fill").map((a, i) => h("button", { class: "btn" + (i ? "" : " primary"), type: "button",
-        onclick: () => { closeDetails(); runItemAction(deck.uid, itemActions(currentItem(deck, char)).indexOf(a)); } }, icon(a.effect === "random" ? "dice" : "bag"), a.label)),
-      out.length > 0 && h("button", { class: "btn", type: "button", onclick: act(() => putCardsBack(deck.uid, out.map(x => x.uid), `Put ${plural(out.length, noun)} back`)) }, `Put ${plural(out.length, noun)} back`)),
+      inside.length > 0 && itemButtons(char, deck).filter(b => !(b.rule.do || []).some(a => a.putIn)).map((b, i) => h("button", { class: "btn" + (i ? "" : " primary"), type: "button",
+        onclick: () => { closeDetails(); pressAction(deck.uid, b.label); } }, icon(buttonIcon(b.rule)), b.label)),
+      out.length > 0 && h("button", { class: "btn", type: "button", onclick: act(() => putPiecesBack(deck.uid, out.map(x => x.uid), `Put ${plural(out.length, noun)} back`)) }, `Put ${plural(out.length, noun)} back`)),
     inside.length ? h("div", { class: "group deck-cards" }, inside.map(card => h("div", { class: "row" + (card.item.image ? " has-img" : "") },
       itemIcon(card.item, "row-icon"),
       h("div", { class: "row-main static" }, h("div", { class: "row-title" }, card.item.name)),
@@ -2867,44 +2809,63 @@ function deckSection(deck, reopen, closeDetails) {
 // them biggest for their shape) until they'd be too small, when it scrolls instead. Drawn pieces
 // are already out of the set, where it is; Keep leaves them there, Put back returns them.
 // The window only shows what drawFromSet did, so a party could later show the same draw to everyone.
-function openDraw(setUid, count = 1) {
+// What came out of a container, in a window: a set's pieces drawn, or what a rule's "Take out of
+// it" took (into a window). At random (given null): count now, and Draw another / Take another.
+// given: [{ uid, n }] already taken (one chosen, everything). Put back returns them where they came
+// from (a set's pieces as cards; anything else into the container, just as many); Keep, or closing,
+// keeps them.
+function openDraw(setUid, count = 1, given = null) {
   const char = store.char();
   const set = char.items.find(e => e.uid === setUid);
   if (!set) return;
-  const noun = pieceNoun(set.item), name = entryName(set);
-  const drawn = []; // piece uids, in the order drawn
+  const isSet = isDeckEntry(set);
+  const noun = isSet ? pieceNoun(set.item) : "thing", name = entryName(set);
+  const drawn = []; // { uid, n }, in the order taken (a stack it joined: counted once)
+  const add = list => { for (const x of list) { const d = drawn.find(y => y.uid === x.uid); if (d) d.n += x.n; else drawn.push({ ...x }); } };
   const draw = n => {
     let got = [];
-    commit((s, c) => { got = drawFromSet(c, setUid, n); }, null, false);
-    drawn.push(...got);
+    commit((s, c) => {
+      if (isSet) { got = drawFromSet(c, setUid, n).map(uid => ({ uid, n: 1 })); return; }
+      const holder = c.items.find(x => x.uid === setUid);
+      for (let i = 0; holder && i < n; i++) { const x = takeRandom(c, holder); if (x) got.push({ uid: x.uid, n: 1 }); }
+    }, null, false);
+    add(got);
     if (!got.length) toast(`The ${name.toLowerCase()} is empty`);
     return got;
   };
+  const putBack = (uids, msg) => {
+    const list = uids.map(u => drawn.find(d => d.uid === u)).filter(Boolean);
+    if (isSet) return putPiecesBack(setUid, list.map(d => d.uid), msg);
+    commit((s, c) => { for (const d of list) returnInto(c, setUid, d.uid, d.n); }, msg, true);
+  };
+  const left = c => { const holder = c.items.find(x => x.uid === setUid) || set; return isSet ? cardsIn(c, holder).length : takeable(c, holder).length; };
+  const verb = isSet ? "drawn" : "taken out";
 
   const title = h("div", { class: "reader-title" });
   const board = drawBoard(noun);
-  const drawBtn = h("button", { class: "btn primary", onclick: () => { if (draw(1).length) refresh(true); } }, icon("dice"), "");
-  const backBtn = h("button", { class: "btn", onclick: () => { putCardsBack(setUid, drawn, `Put ${plural(drawn.length, noun)} back in the ${name}`); close(); } }, icon("undo"), "Put back");
-  const keepBtn = h("button", { class: "btn primary", onclick: () => { toast(`${plural(drawn.length, noun)} to your inventory`); close(); } }, icon("check"), "Keep");
+  const drawBtn = h("button", { class: "btn primary", hidden: !!given, onclick: () => { if (draw(1).length) refresh(true); } }, icon("dice"), "");
+  const backBtn = h("button", { class: "btn", onclick: () => { putBack(drawn.map(d => d.uid), `Put ${plural(howMany(), noun)} back in the ${name}`); close(); } }, icon("undo"), "Put back");
+  const keepBtn = h("button", { class: "btn primary", onclick: () => { toast(`${plural(howMany(), noun)} to your inventory`); close(); } }, icon("check"), "Keep");
+  const howMany = () => drawn.reduce((s, d) => s + d.n, 0);
   const refresh = (added = false) => {
     const c = store.char();
-    const pieces = drawn.map(u => c.items.find(x => x.uid === u)).filter(Boolean);
-    const left = cardsIn(c, c.items.find(x => x.uid === setUid) || set).length;
-    title.textContent = `${name}: ${plural(pieces.length, noun)} drawn`;
-    drawBtn.lastChild.textContent = `Draw ${noun === "card" ? "another" : "one more"} (${left} left)`;
-    drawBtn.disabled = !left;
+    const pieces = drawn.map(d => { const p = c.items.find(x => x.uid === d.uid); return p && { uid: p.uid, item: p.item, name: entryName(p) + (d.n > 1 ? ` ×${d.n}` : "") }; }).filter(Boolean);
+    const n = left(c);
+    title.textContent = `${name}: ${plural(howMany(), noun)} ${verb}`;
+    drawBtn.lastChild.textContent = `${isSet ? "Draw" : "Take"} ${noun === "card" ? "another" : "one more"} (${n} left)`;
+    drawBtn.disabled = !n;
     backBtn.disabled = keepBtn.disabled = !pieces.length;
-    board.show(pieces.map(p => ({ uid: p.uid, item: p.item, name: entryName(p) })), added, uid => {
+    board.show(pieces, added, uid => {
       // Put just this one back.
-      putCardsBack(setUid, [uid], null);
-      drawn.splice(drawn.indexOf(uid), 1);
+      putBack([uid], null);
+      drawn.splice(drawn.findIndex(d => d.uid === uid), 1);
       if (drawn.length) refresh(); else close();
     });
   };
 
   const overlay = h("div", { class: "reader draw-view", role: "dialog", "aria-modal": "true", "aria-label": `Drawing from ${name}` },
     h("div", { class: "reader-bar" }, title,
-      iconBtn("x", "Close (keeps what was drawn)", () => close())),
+      iconBtn("x", `Close (keeps what was ${verb})`, () => close())),
     board.el,
     h("div", { class: "draw-actions" }, drawBtn, backBtn, keepBtn));
   const onKey = e => { if (e.key === "Escape") close(); };
@@ -2920,7 +2881,8 @@ function openDraw(setUid, count = 1) {
   window.addEventListener("resize", onResize);
   document.body.append(overlay);
   document.body.classList.add("modal-open");
-  if (draw(count).length) refresh(true); else close();
+  if (given) { add(given); if (drawn.length) refresh(true); else close(); }
+  else if (draw(count).length) refresh(true); else close();
 }
 
 // The drawn pieces, laid out as big as they fit. Shows pieces given as { uid, item, name }
@@ -2994,7 +2956,7 @@ function cardBackButton(e, close) {
   if (!e.fromDeck || e.parent === e.fromDeck) return null;
   const deck = store.char().items.find(x => x.uid === e.fromDeck);
   if (!deck) return null;
-  return h("button", { class: "btn primary read-btn", type: "button", onclick: () => { close(); putCardsBack(deck.uid, [e.uid], `Put ${entryName(e)} back in the ${entryName(deck)}`); } },
+  return h("button", { class: "btn primary read-btn", type: "button", onclick: () => { close(); putPiecesBack(deck.uid, [e.uid], `Put ${entryName(e)} back in the ${entryName(deck)}`); } },
     icon("package"), `Put back in the ${entryName(deck)}`);
 }
 
@@ -3159,27 +3121,39 @@ function openItemForm(item, opts = {}) {
 
   // Its states' layers, a tab each (an item that needs attunement starts with an empty Attuned one).
   draft.layers = clone(draft.layers || {});
-  for (const st of systemStates()) if (st.requires && !draft.layers[st.key] && hasFeature(draft, st.requires, srcId)) draft.layers[st.key] = {};
-  let tab = "basic";
+  for (const st of systemStates()) if (st.requires && !draft.layers[st.key] && hasFeature(draft, st.requires, srcId)
+    && (!st.requiresProperty || itemHasProperty(draft, st.requiresProperty))) draft.layers[st.key] = {};
+  let tab = opts.tab === "triggers" ? "triggers" : "basic"; // (opts.tab: open at its Rules)
   const tabsBox = h("div"), layerBox = h("div");
-  const triggersBox = triggersEditor(draft);
+  const triggersBox = itemRulesEditor(draft, "item", srcId);
   const drawTabs = () => {
     const present = systemStates().filter(st => draft.layers[st.key]);
     const missing = systemStates().filter(st => !draft.layers[st.key]);
     if (tab !== "basic" && tab !== "triggers" && !draft.layers[tab]) tab = "basic";
-    setChildren(tabsBox, (present.length || missing.length) && h("div", { class: "inline wrap layer-tabs" },
-      subTabs("Item states", [["basic", "Basic"], ...present.map(st => [st.key, st.label]), clockworkOn() && ["triggers", "Rules"]].filter(Boolean), tab, k => { tab = k; drawTabs(); }),
-      missing.length > 0 && h("select", { class: "add-state", "aria-label": "Add a state", onchange: e => {
-        if (!e.target.value) return;
-        draft.layers[e.target.value] = {};
-        tab = e.target.value;
+    setChildren(tabsBox, (present.length || missing.length || canEditCampaignStates()) && h("div", { class: "inline wrap layer-tabs" },
+      subTabs("Item states", [["basic", "Basic"], ...present.map(st => [st.key, st.label]), ["triggers", "Rules"]].filter(Boolean), tab, k => { tab = k; drawTabs(); }),
+      (missing.length > 0 || canEditCampaignStates()) && h("select", { class: "add-state", "aria-label": "Add a state", onchange: e => {
+        const v = e.target.value;
+        e.target.value = "";
+        if (v === "__new") {
+          // A new campaign state, given to this item (others get it in their own editor).
+          return editOwnState(null, st => {
+            saveCampaignStates([...campaignStates(), st]);
+            draft.layers[st.key] = {};
+            tab = st.key;
+            drawTabs();
+          }, { requires: STATE_GIVEN });
+        }
+        if (!v) return;
+        draft.layers[v] = {};
+        tab = v;
         drawTabs();
-      } }, h("option", { value: "" }, "+ Add a state…"), missing.map(st => h("option", { value: st.key }, st.label)))));
+      } }, h("option", { value: "" }, "+ Add a state…"), missing.map(st => h("option", { value: st.key }, st.label)),
+        canEditCampaignStates() && h("option", { value: "__new" }, "New state…"))));
     form.hidden = tab !== "basic";
     const st = stateByKey(tab);
     setChildren(layerBox, st ? layerForm(st, draft, tpl, () => { delete draft.layers[st.key]; tab = "basic"; drawTabs(); })
-      : tab === "triggers" && [h("p", { class: "muted small" }, "What happens by itself. When the item enters an inventory or is equipped, as something becomes true (a state turns on, its charges reach 0, a value passes a line), or every so often while something holds, it can turn states on or off, change its charges and Local values, and tell the player."),
-        triggersBox]);
+      : tab === "triggers" && triggersBox);
   };
   drawTabs();
 
@@ -3340,7 +3314,8 @@ async function openIconDrawer(opts, onSave) {
       // use them, and the Variables tab lists them (with this copy's real values in an inventory).
       variableGroups: [iconVariableGroup(opts.vars)],
       // What a hotspot can ask the app to do with the item (see makeIconInteractive).
-      appActions: iconAppActions(),
+      // (none for a panel's control: buttons null)
+      appActions: opts.buttons === null ? [] : iconAppActions(opts.doc, opts.buttons || []),
       // The Library: the app's Parts (kits in slots) and Symbols, and your drawings to put in as a
       // group (Catalog → Drawings; not the one being drawn).
       libraries: window.PARTS_LIBRARY || [],
@@ -3363,6 +3338,8 @@ async function openIconDrawer(opts, onSave) {
     editor.on("panelresize", widths => writePref("mimic-icon-editor-panels", JSON.stringify(widths)));
     editor.on("preferenceschange", prefs => writePref("mimic-icon-editor-prefs", JSON.stringify(prefs)));
     stopSync = syncIconVariables(editor, host, opts.vars);
+    // Hotspots named as they're drawn: what "Run the item's rules" offers follows the drawing.
+    if (opts.buttons !== null) editor.store.on("change", doc => { editor.appActions = iconAppActions(doc, opts.buttons || []); });
     // Fit the canvas once the window has its final size.
     requestAnimationFrame(() => requestAnimationFrame(() => editor?.fitToView()));
   } catch (e) {
@@ -3637,7 +3614,7 @@ function pickDrawing(title, onPick, starters = true) {
 function editItemDrawing(it, done, opts = {}) {
   const d = findDrawing(it.iconLib);
   const name = opts.name ?? it.name, self = opts.self ?? it._self;
-  openIconDrawer({ doc: d?.doc || it.iconDoc, name, color: opts.name ? it.color : itemColor(it), vars: it._vars }, (doc, svg) => {
+  openIconDrawer({ doc: d?.doc || it.iconDoc, name, color: opts.name ? it.color : itemColor(it), vars: it._vars, buttons: opts.name ? null : itemButtonNames(it) }, (doc, svg) => {
     if (!doc) { setItemDrawing(it, null); return done(); }
     const others = d ? drawingUsers(d.id).filter(u => u !== self).length : 0;
     const asNew = () => { setItemDrawing(it, addDrawing(name, doc, svg)); done(); };
@@ -3847,13 +3824,10 @@ function featuresPanel(draft, isOn, chosen, tpl) {
       return [k, box];
     }));
     const kinds = h("div", { class: "field" });
-    // Its actions, whatever it holds (a set's start as Draw a card and Take all out).
-    const actions = h("div", { class: "form grid feature-fields" }, actionsField({ label: "Actions" }, draft));
     const draw = () => {
       const on = !!kindOn();
       for (const [k, box] of Object.entries(boxes)) box.hidden = !on || k !== kind || !box.childElementCount;
       kinds.hidden = !on;
-      actions.hidden = !on || kind === "pack";
     };
     const pick = k => { kind = k; for (const [x] of KINDS) chosen[x] = x === k; draw(); drawSummary(); };
     setChildren(kinds, h("span", null, "Holds"), slideSwitch("Holds", KINDS, kind, pick, { cls: "seg-field container-kinds" }));
@@ -3864,7 +3838,7 @@ function featuresPanel(draft, isOn, chosen, tpl) {
     return h("div", { class: "feature container-card" },
       h("label", { class: "check" }, input, h("span", null, h("b", null, "Container"),
         h("span", { class: "muted" }, " Holds something: things (a backpack, a piggy bank), a liquid (a waterskin), its own pieces (a deck of cards), or a pack's contents that unpack."))),
-      kinds, Object.values(boxes), actions);
+      kinds, Object.values(boxes));
   }
 
   // In groups: what it holds, how it's used, equipment, stacking (a system's own go by what they do).
@@ -3933,8 +3907,6 @@ function fieldInput(f, draft) {
       return packContentsField(f, draft);
     case "allows":
       return allowsField(f, draft);
-    case "actions":
-      return actionsField(f, draft);
     case "compartments":
       return compartmentsField(f, draft);
     case "icon": {
@@ -3944,7 +3916,7 @@ function fieldInput(f, draft) {
       // Draw a new icon (it goes into the drawings library), or edit this item's drawing.
       const drawBtn = h("button", { class: "btn", type: "button", onclick: () => {
         if (draft.iconDoc) return editItemDrawing(draft, draw);
-        openIconDrawer({ name: draft.name, color: itemColor(draft), templates: true, vars: draft._vars }, (doc, svg) => {
+        openIconDrawer({ name: draft.name, color: itemColor(draft), templates: true, vars: draft._vars, buttons: itemButtonNames(draft) }, (doc, svg) => {
           if (doc) setItemDrawing(draft, addDrawing(draft.name, doc, svg));
           draw();
         });
@@ -4201,7 +4173,7 @@ function openTemplateEditor(tpl, copy = false) {
   const hadHue = tpl?.hue != null; // (a colour it was given; else one made up for a top template, dropped when it goes under another)
   if (draft.hue == null && !draft.parent) draft.hue = templateHue(draft);
   let close;
-  const tplTriggers = triggersEditor(draft);
+  const tplTriggers = itemRulesEditor(draft, "template");
   const fieldsBox = h("div", { class: "tpl-fields" });
   const coreInfo = h("p", { class: "muted small" });
   const shadeBox = h("div", { class: "field full shade-field" });
@@ -4301,8 +4273,7 @@ function openTemplateEditor(tpl, copy = false) {
           if (e.target.checked) draft.layers[st.key] = draft.layers[st.key] || {}; else delete draft.layers[st.key];
           if (!Object.keys(draft.layers).length) delete draft.layers;
         } }), " " + st.label)))],
-    clockworkOn() && [h("h4", null, "Rules"),
-      h("p", { class: "muted small" }, "Its items start with these (each item can change them)."), tplTriggers],
+    [h("h4", null, "Rules"), tplTriggers],
     h("h4", null, "Features"),
     h("p", { class: "muted small" }, "What its items can do to begin with. “Yes” can be changed for each item; “Always” can't, and puts the feature's fields with the template's own."),
     featureRows), { wide: true, footer: [
@@ -4427,7 +4398,7 @@ const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimi
 
 // ------------------------------------------------------------------ updates
 // The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
-const APP_VERSION = "1.0.6";
+const APP_VERSION = "1.0.7";
 const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
 const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
 const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);
@@ -4660,10 +4631,10 @@ function campaignRulesBlock() {
 function openCampaignStates() {
   const sysStates = systemStates().filter(st => !campaignStates().some(o => o.key === st.key));
   const own = clone(campaignStates());
-  const canEdit = isGmDevice() || !party.active;
+  const canEdit = canEditCampaignStates();
   const box = h("div", { class: "states-list" });
-  const needs = st => st.requires ? featureByKey(st.requires)?.label || st.requires : null;
-  const describe = st => [st.who === "gm" ? `Only the ${term("gm")}` : "The player", needs(st) && `needs ${needs(st)}${st.requiresProperty ? ` (${st.requiresProperty})` : ""}`, st.limit && `limit ${st.limit.default}`].filter(Boolean).join(" · ");
+  const needs = st => st.requires && st.requires !== STATE_GIVEN ? featureByKey(st.requires)?.label || st.requires : null;
+  const describe = st => [st.who === "gm" ? `Only the ${term("gm")}` : "The player", st.requires === STATE_GIVEN && "items given it", needs(st) && `needs ${needs(st)}${st.requiresProperty ? ` (${st.requiresProperty})` : ""}`, st.limit && `limit ${st.limit.default}`].filter(Boolean).join(" · ");
   const draw = () => setChildren(box,
     h("h4", null, `From ${activeSystem().name}`, h("span", { class: "muted small" }, " (fixed)")),
     sysStates.length ? sysStates.map(st => h("div", { class: "state-row" }, h("span", { class: "grow" }, h("b", null, st.label), h("small", { class: "muted" }, describe(st))), icon("lock")))
@@ -4672,30 +4643,45 @@ function openCampaignStates() {
     own.length ? own.map((st, i) => h("div", { class: "state-row" },
       h("span", { class: "grow" }, h("b", null, st.label), h("small", { class: "muted" }, describe(st))),
       canEdit && iconBtn("edit", `Change ${st.label}`, () => editOwnState(st, next => { own[i] = next; save(); })),
-      canEdit && iconBtn("trash", `Remove ${st.label}`, () => { own.splice(i, 1); save(); }, "danger-hover")))
+      canEdit && iconBtn("trash", `Remove ${st.label}`, () => {
+        const remove = () => { own.splice(i, 1); save(); };
+        const n = stateUsers(st.key).length;
+        if (!n) return remove();
+        confirmDialog(`${plural(n, "item")} ${n === 1 ? "has" : "have"} ${st.label} (${stateUsers(st.key).slice(0, 3).join(", ")}${n > 3 ? "…" : ""}). Removed, they lose it and what it changes.`, `Remove ${st.label}`, remove);
+      }, "danger-hover")))
       : h("p", { class: "muted small" }, "None yet. Add one for things the game system doesn't have: Broken, Lit, Wet, Hidden…"),
     canEdit && h("button", { class: "btn", onclick: () => editOwnState(null, next => { own.push(next); save(); }) }, icon("plus"), "Add a state"));
-  // Saved at once (and, in a party, sent to the host, so players' devices have them).
-  const save = async () => {
-    commit(() => { store.campaign().states = clone(own); }, null);
-    draw();
-    if (party.active && party.isGm() && party.campaign?.id === store.campaign().id) {
-      try { await party.loadCampaign(store.campaign()); } catch (e) { toast(e.message); }
-    }
-  };
+  const save = () => { saveCampaignStates(own); draw(); };
   draw();
   openModal("Item states", h("div", { class: "form" },
     h("p", { class: "muted small" }, "What an item in an inventory can be. Each can change the item (a layer, in its editor) and be used in rules."), box));
 }
 
-// Add (st null) or change one of the campaign's own states: onSave(state).
-function editOwnState(st, onSave) {
-  const draft = st ? clone(st) : { label: "", who: "player" };
+// Who may add and change the campaign's own states: the GM (in a party), anyone outside one.
+const canEditCampaignStates = () => isGmDevice() || !party.active;
+// The items (by name: in the catalog and the campaign's inventories) with a layer for a state.
+const stateUsers = key => [...new Set([...store.allCustomItems(), ...store.campaign().characters.flatMap(c => c.items.map(e => e.item))]
+  .filter(it => it?.layers?.[key]).map(it => it.name))];
+// A campaign state only the items given it have (in their editor: "+ Add a state…"), not every item.
+const STATE_GIVEN = "given";
+// The campaign's own states, saved at once (and, in a party, sent to the host, so players' devices
+// have them).
+async function saveCampaignStates(list) {
+  commit(() => { store.campaign().states = clone(list); }, null);
+  if (party.active && party.isGm() && party.campaign?.id === store.campaign().id) {
+    try { await party.loadCampaign(store.campaign()); } catch (e) { toast(e.message); }
+  }
+}
+
+// A campaign state, new (st null; start: what it starts as) or to change.
+function editOwnState(st, onSave, start = {}) {
+  const draft = st ? clone(st) : { label: "", who: "player", ...start };
   const taken = new Set(systemStates().map(x => x.key).filter(k => k !== st?.key));
   let close;
   const save = () => {
     const label = (draft.label || "").trim().slice(0, 30);
     if (!label) return toast("Give it a name");
+    if (systemStates().some(x => x.key !== st?.key && x.label.toLowerCase() === label.toLowerCase())) return toast(`There's already a state called ${label}`);
     if (!st) {
       // Its key, from its name (unique among the campaign's states).
       let key = label.toLowerCase().replace(/[^a-z0-9]+/g, "_").replace(/^_+|_+$/g, "") || "state";
@@ -4718,6 +4704,7 @@ function editOwnState(st, onSave) {
     h("label", { class: "field" }, h("span", null, "Only items that have"),
       h("select", { onchange: e => { draft.requires = e.target.value; } },
         h("option", { value: "", selected: !draft.requires }, "Any item"),
+        h("option", { value: STATE_GIVEN, selected: draft.requires === STATE_GIVEN }, "Only items given it (in their editor)"),
         allFeatures().map(f => h("option", { value: f.key, selected: draft.requires === f.key }, f.label)))),
     h("label", { class: "field" }, h("span", null, "At most, per character (optional)"),
       h("input", { type: "number", min: 1, value: draft.limit?.default ?? "", placeholder: "No limit",

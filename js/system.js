@@ -76,7 +76,21 @@ const systemTemplates = () => systemIndex().list;
 // package is switched off), else the system's.
 function templateById(id) {
   if (!id) return null;
-  return (store.data && store.allTemplates().find(t => t.id === id)) || systemIndex().templates.get(id) || null;
+  return (store.data && packageTemplateIndex().get(id)) || systemIndex().templates.get(id) || null;
+}
+// The packages' templates by id (the first of an id wins, as a search would). Made again when a
+// package's list of templates is replaced or grows or shrinks (they're changed no other way), as
+// it's asked for several times for each row drawn.
+let pkgTplIndex = null, pkgTplLists = [];
+function packageTemplateIndex() {
+  const lists = store.data.packages.map(p => p.templates), lens = lists.map(l => l.length);
+  if (!pkgTplIndex || lists.length !== pkgTplLists.length || lists.some((l, i) => l !== pkgTplLists[i] || lens[i] !== pkgTplIndex.lens[i])) {
+    const map = new Map();
+    for (const l of lists) for (const t of l) if (!map.has(t.id)) map.set(t.id, t);
+    pkgTplIndex = { map, lens };
+    pkgTplLists = lists;
+  }
+  return pkgTplIndex.map;
 }
 
 const isSystemTemplate = tpl => !!tpl && systemIndex().templates.get(tpl.id) === tpl;

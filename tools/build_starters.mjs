@@ -140,7 +140,7 @@ const starters = [];
     card("Top card", 0, 0, "pieces > 0"),
     shape({ shape: "crescent", name: "Mark", x: 128, y: 128, width: 50, height: 60, bindings: [bind("visible", "pieces > 0")] }),
     shape({ shape: "rect", name: "Deck (touch)", x: 136, y: 136, width: 160, height: 210,
-      hotspot: T.createHotspot({ hidden: true, gestures: [tap(act({ do: "app", app: "draw" }), act({ do: "sound", sound: "whoosh", volume: 0.4 }))] }) }),
+      hotspot: T.createHotspot({ hidden: true, gestures: [tap(act({ do: "app", app: "press", key: "Draw-a-card" }), act({ do: "sound", sound: "whoosh", volume: 0.4 }))] }) }),
   ];
   starters.push({ id: "starter-deck", name: "Card deck", hint: "For a set (a deck of cards): tap to draw a card. The stack shows how many are left (the app's value pieces).", doc: doc(layers, [v("pieces", 3, 0, 60)]) });
 }

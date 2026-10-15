@@ -67,13 +67,13 @@ function renderGm() {
 // A second row of tabs: Panels, Values (the Global and Local values) and Connections (what drives
 // what: Clockwork's connections).
 
-const GM_CONTROLS_TABS = [["panels", "Panels"], ["values", "Values"], ["connections", "Connections"]];
+const GM_CONTROLS_TABS = [["panels", "Panels"], ["values", "Values"], ["rules", "Rules"], ["connections", "Connections"]];
 
 function gmControlsPage() {
   const tab = GM_CONTROLS_TABS.some(([k]) => k === ui.gmControlsTab) ? ui.gmControlsTab : "panels";
   return [
     subTabs("Controls", GM_CONTROLS_TABS, tab, k => { ui.gmControlsTab = k; render(); }),
-    tab === "values" ? valuesView() : tab === "connections" ? clockworkView() : gmControlsSection(),
+    tab === "values" ? valuesView() : tab === "rules" ? ruleBookView() : tab === "connections" ? clockworkView() : gmControlsSection(),
   ];
 }
 
@@ -622,7 +622,7 @@ function editPin(board, pin, onSave, onRemove = null) {
     }, null, { drawings: drawingLibrary(), onDrawing: d => { setItemDrawing(obj, d); delete obj.icon; redraw(); } }) }, icon("image"), "Choose…"),
     h("button", { type: "button", class: "btn", onclick: () => {
       if (obj.iconDoc) return editItemDrawing(obj, redraw, { name: nameOf() });
-      openIconDrawer({ name: nameOf(), color: obj.color, templates: true }, (doc, svg) => {
+      openIconDrawer({ name: nameOf(), color: obj.color, templates: true, buttons: null }, (doc, svg) => {
         if (doc) { setItemDrawing(obj, addDrawing(nameOf(), doc, svg)); delete obj.icon; }
         redraw();
       });

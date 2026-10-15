@@ -413,6 +413,12 @@ public class PartyServer {
 
     private boolean isGm(Request req, String token) { return roleOf(token, req.fromHostDevice()).equals("gm"); }
 
+    /** Which GM device runs the campaign's world rules: the first GM connected, else the first GM (as server.py's world_runner). */
+    private String worldRunner() {
+        for (int i = 0; i < gms.length(); i++) { Integer n = online.get(gms.optString(i)); if (n != null && n > 0) return gms.optString(i); }
+        return gms.length() > 0 ? gms.optString(0) : null;
+    }
+
     static String deviceId(String token) {
         try {
             byte[] d = java.security.MessageDigest.getInstance("SHA-256").digest(("mimic-device:" + token).getBytes(StandardCharsets.UTF_8));
@@ -527,7 +533,11 @@ public class PartyServer {
             myShows.put(copy);
         }
         snap.put("shows", myShows);
-        if (gmView) snap.put("discards", new JSONArray(discards.toString()));
+        if (gmView) {
+            snap.put("discards", new JSONArray(discards.toString()));
+            // With no GMs chosen the host is the GM; else one GM device runs the world rules.
+            snap.put("runsWorld", gms.length() > 0 ? token.equals(worldRunner()) : host);
+        }
         snap.put("isHost", host);
         snap.put("campaign", campaign == null ? JSONObject.NULL : new JSONObject(campaign.toString()));
         snap.put("time", System.currentTimeMillis()); // the clock moving values follow
@@ -2560,6 +2570,22 @@ public class PartyServer {
 
     /** POST /api/campaign {id, name, shops, gmValues}: a GM loads one of their campaigns (see campaign_api in server.py). */
     /** A campaign's own item states (see clean_own_states in server.py): known fields only, within limits. */
+    // The campaign's rule book (js/triggers.js): kept as the GM's device sent it, within limits
+    // (every device checks each rule itself before it runs). As server.py's clean_rules.
+    private static final int RULES_MAX = 200, RULES_MAX_BYTES = 200_000;
+    private static JSONArray cleanRules(JSONArray raw) {
+        JSONArray out = new JSONArray();
+        int size = 0;
+        for (int i = 0; raw != null && i < raw.length() && i < RULES_MAX; i++) {
+            JSONObject r = raw.optJSONObject(i);
+            if (r == null) continue;
+            size += r.toString().length();
+            if (size > RULES_MAX_BYTES) break;
+            out.put(r);
+        }
+        return out;
+    }
+
     private static JSONArray cleanOwnStates(JSONArray raw) throws JSONException {
         JSONArray out = new JSONArray();
         for (int i = 0; raw != null && i < raw.length() && out.length() < 30; i++) {
@@ -2622,6 +2648,7 @@ public class PartyServer {
             // Rules, values and controls (Clockwork): off, shops don't follow values.
             campaign.put("clockwork", !(body.opt("clockwork") instanceof Boolean) || body.optBoolean("clockwork", true));
             campaign.put("ownStates", cleanOwnStates(body.optJSONArray("ownStates")));
+            campaign.put("rules", cleanRules(body.optJSONArray("rules")));
             changed(false);
         }
         return new JSONObject().put("ok", true);

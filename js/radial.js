@@ -251,8 +251,8 @@ function inventoryMenu(e) {
         if (x) playerSetState(e.uid, s.key, !stateOn(c, x, s.key));
       } };
     }),
-    // The item's own actions (a container's: its words, its effect).
-    ...itemActions(currentItem(e, char)).map((a, i) => ({ icon: a.effect === "fill" ? "plus" : a.effect === "random" ? "dice" : "bag", label: a.label, run: () => runItemAction(e.uid, i) })),
+    // The item's own actions: its "used" rules' buttons (js/triggers.js).
+    ...itemButtons(char, e).map(b => ({ icon: buttonIcon(b.rule), label: b.label, run: () => pressAction(e.uid, b.label) })),
     editing() && { icon: "edit", label: "Edit", run: () => openItemForm(e.item, { entryUid: e.uid }) },
     { icon: "move", label: "Move to…", run: () => openMoveTo(e.uid) },
     !e.purse && { icon: "coins", label: "Sell", run: () => openSell(e.uid) },

@@ -12,6 +12,8 @@
   --warn: #b7791f;
   --bad: #b3261e;
   --attune: #8a4fb8;
+  /* Rules' blocks (js/rule-blocks.js): When, If, Do, a message, Applies to. */
+  --rule-when: #c97a1c; --rule-if: #3f82c4; --rule-do: #3f7d4a; --rule-say: #5b8f3c; --rule-scope: #8a4fb8;
   --fill-gear: rgb(185 138 74 / .16);
   --fill-liquid: rgb(64 132 196 / .15);
   --fill-over: rgb(179 38 30 / .14);
@@ -50,6 +52,7 @@
     --warn: #e6b450;
     --bad: #f07167;
     --attune: #c79bf0;
+    --rule-when: #9a5b14; --rule-if: #2d5f93; --rule-do: #2f5f38; --rule-say: #45702c; --rule-scope: #6a3a90;
     --fill-gear: rgb(214 170 104 / .14);
     --fill-liquid: rgb(96 160 226 / .16);
     --fill-over: rgb(240 113 103 / .16);
@@ -675,7 +678,6 @@ input.settle-n { width: 70px; flex: none; }
 .slot-box.full { border-style: solid; }
 .slot-head { display: flex; justify-content: space-between; margin-bottom: 4px; }
 .action-row > .comp-cap { flex: 0 1 200px !important; }
-.actions-rows { display: grid; gap: 6px; }
 .action-row { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .action-row > input { flex: 1 1 140px; min-width: 0; }
 .action-row > select { flex: 1 1 150px; width: auto; min-width: 0; }
@@ -1597,22 +1599,63 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .layer-form { display: flex; flex-direction: column; gap: 10px; }
 .layer-form .btn.danger { align-self: flex-start; }
 
-/* Triggers */
-.triggers-edit { display: flex; flex-direction: column; gap: 10px; }
-.trigger-row { position: relative; border: 1px solid var(--border); border-radius: 10px; padding: 10px 44px 10px 12px; display: flex; flex-direction: column; gap: 6px; }
-.trigger-row > .icon-btn { position: absolute; top: 6px; right: 6px; }
-.trigger-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 8px; }
-.trigger-line select { width: auto; }
-.triggers-edit > .btn { align-self: flex-start; }
-/* Rules (js/triggers.js): a value, how it's compared, and to what; actions alike. */
-.trigger-line > input.rule-addr { width: auto; flex: 2 1 190px; min-width: 0; font-family: var(--mono, ui-monospace, monospace); font-size: .85rem; }
-.trigger-line > input.rule-to { width: auto; flex: 1 1 110px; min-width: 0; }
-.trigger-line > input.rule-num { width: 84px; flex: none; }
-.trigger-line > input.rule-msg { width: auto; flex: 3 1 220px; min-width: 0; }
-.rule-conds { display: flex; flex-direction: column; gap: 6px; }
-.rule-words { margin: 0; font-style: italic; }
-.rule-help { align-self: stretch; }
-.rule-help summary { cursor: pointer; }
+/* Rules as blocks (js/rule-blocks.js; mockups/rule-book.html): coloured blocks stacked, the
+   choices as white pills inside them. */
+.rule-blocks { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.rule-words { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; font-size: .88rem; margin-bottom: 8px; }
+.rule-words > b { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin-bottom: 2px; }
+.rblk { position: relative; border-radius: 10px; color: #fff; padding: 8px 10px 9px; font-weight: 600; font-size: .88rem;
+  box-shadow: inset 0 -3px 0 rgb(0 0 0 / .18); min-width: 0; }
+.rblk-when { background: var(--rule-when); } .rblk-if { background: var(--rule-if); } .rblk-do, .rblk-action { background: var(--rule-do); }
+.rblk-say { background: var(--rule-say); } .rblk-scope { background: var(--rule-scope); margin-top: 8px; }
+.rblk-action { background: color-mix(in srgb, #000 22%, var(--rule-do)); margin-top: 4px; }
+.rblk-label { display: block; font-size: .68rem; text-transform: uppercase; letter-spacing: .06em; opacity: .85; margin-bottom: 4px; }
+.rblk-inner { margin: 2px 0 0 12px; }
+.rblk-inner > .rblk { margin-top: 4px; }
+.rblk-line { display: flex; flex-wrap: wrap; align-items: center; gap: 5px; margin-top: 4px; min-width: 0; }
+.rblk-line:first-child { margin-top: 0; }
+.rblk .pill { width: auto; min-width: 0; max-width: 100%; min-height: 28px; padding: 2px 10px; border-radius: 999px; border: 0; background: #fff; color: #2b2319;
+  font: 600 .84rem var(--font); }
+.rblk select.pill { padding-right: 6px; }
+.rblk .pill-input { flex: 1 1 110px; font-weight: 500; }
+.rblk .pill-wide { flex: 3 1 200px; font-style: italic; }
+.rblk .pill-addr { flex: 2 1 150px; font-family: var(--mono, ui-monospace, monospace); font-size: .8rem; }
+.rblk .pill-num { width: 76px; flex: none; }
+.rblk .pill-fixed { display: inline-flex; align-items: center; }
+.rblk .pill-add, .rblk .pill-slot { background: none; color: #fff; border: 2px dashed rgb(255 255 255 / .6); cursor: pointer; }
+.rblk-note { opacity: .85; font-weight: 500; font-style: italic; }
+.rblk-x { min-width: 28px; min-height: 28px; border: 0; border-radius: 999px; background: rgb(255 255 255 / .2); color: #fff; font-weight: 700; cursor: pointer; }
+.rblk-x:hover { background: rgb(255 255 255 / .35); }
+.rblk-tools { display: inline-flex; gap: 3px; margin-left: auto; }
+.rule-add-block { border: 2px dashed var(--border); border-radius: 10px; padding: 8px; background: color-mix(in srgb, var(--surface) 50%, transparent);
+  color: var(--muted); font-weight: 600; margin: 4px 0; cursor: pointer; }
+.rule-add-block:hover { color: var(--text); border-color: var(--muted); }
+.rule-override { border-left: 4px solid var(--rule-scope); background: color-mix(in srgb, var(--rule-scope) 10%, var(--surface)); border-radius: 8px;
+  padding: 7px 10px; font-size: .84rem; margin-top: 8px; }
+.rule-override p { margin: 0; } .rule-override p + p { margin-top: 4px; }
+.rule-editor { display: flex; flex-direction: column; gap: 10px; }
+/* Add a block: the palette */
+.rule-palette h4 { margin: 12px 0 5px; font-size: .7rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); }
+.rule-palette h4:first-child { margin-top: 0; }
+.rule-palette-row { display: flex; flex-wrap: wrap; gap: 5px; }
+.rblk-chip { padding: 6px 10px; border: 0; cursor: pointer; font: 600 .84rem var(--font); }
+.rblk-chip:disabled { opacity: .45; cursor: not-allowed; }
+/* The rule book (GM → Controls → Rules) and the item editor's list from it */
+.rule-search { margin: 6px 0 4px; }
+.rule-group-head { display: flex; align-items: baseline; gap: 8px; margin: 14px 0 6px; }
+.rule-group-head h3 { margin: 0; flex: 1; font-family: var(--display); }
+.rule-card { display: flex; flex-direction: column; gap: 5px; width: 100%; text-align: left; border: 1px solid var(--border); border-radius: 11px;
+  background: var(--surface); color: var(--text); padding: 8px 10px; margin-bottom: 7px; font: inherit; cursor: pointer; }
+.rule-card:hover { border-color: var(--muted); }
+.rule-card .chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.rule-card .chip { font-size: .72rem; padding: 1px 8px; border-radius: 999px; background: var(--surface-2); color: var(--muted); }
+.rule-card .chip.scope { background: color-mix(in srgb, var(--rule-scope) 16%, var(--surface)); color: var(--rule-scope); font-weight: 600; }
+.rule-card .chip.carried { background: color-mix(in srgb, var(--rule-if) 14%, var(--surface)); color: var(--rule-if); }
+.rule-card .chip.overrides { background: color-mix(in srgb, var(--good) 16%, var(--surface)); color: var(--good); }
+.rule-card .chip.overridden { background: color-mix(in srgb, var(--warn) 18%, var(--surface)); color: var(--warn); }
+.item-rules { display: flex; flex-direction: column; gap: 6px; }
+.item-rule { border: 1px solid var(--border); border-radius: 12px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+.item-rule-remove { align-self: flex-start; }
 .tpl-tile.example { border-style: dashed; }
 
 /* A deleted template still used by items (and its filter): faded. */

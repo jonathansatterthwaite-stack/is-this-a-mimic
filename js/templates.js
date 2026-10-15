@@ -51,7 +51,6 @@ const CORE_FEATURES = [
     { key: "contentsView", label: "Shows what's in it", kind: "select", options: ["list", "details", "sealed"],
       labels: { list: "In the inventory (a section of its own)", details: "Only in its details (like a deck of cards)", sealed: "Sealed: hidden (only the GM sees)" } },
     { key: "compartments", label: "Compartments", kind: "compartments" },
-    { key: "actions", label: "Actions", kind: "actions" },
   ] },
   { key: "liquid", label: "Liquid", hint: "Holds a liquid: record what's in it and how much.", fields: [
     { key: "liquidPints", label: "Liquid capacity (pints)", kind: "number", step: "any" },
@@ -59,7 +58,6 @@ const CORE_FEATURES = [
   { key: "deck", label: "Set", hint: "Made of pieces kept together, like the cards of a deck or the pieces of a chess set. They don't clutter the inventory; take them out (or draw one at random) and put them back.", fields: [
     { key: "pieceName", label: "One piece is called", kind: "text", placeholder: "card, piece, tile…" },
     { key: "deckCards", label: "Pieces", kind: "pieces" },
-    { key: "actions", label: "Actions", kind: "actions" },
   ] },
   { key: "pack", label: "Pack", hint: "An equipment pack: unpacks into the items listed, packed the way you choose.", fields: [
     { key: "contents", label: "Contents", kind: "packContents" },

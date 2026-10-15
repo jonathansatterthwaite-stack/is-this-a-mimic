@@ -689,7 +689,7 @@ function editPanelControl(panel, ctl, at) {
         }, null, { drawings: drawingLibrary(), onDrawing: d => { setItemDrawing(draft, d); drawBox(); } }) }, icon("image"), "Choose…"),
         h("button", { type: "button", class: "btn", onclick: () => {
           if (draft.iconDoc) return editItemDrawing(draft, drawBox, { name: name(), self: ctl });
-          openIconDrawer({ name: name(), color: draft.color, templates: true }, (doc, svg) => {
+          openIconDrawer({ name: name(), color: draft.color, templates: true, buttons: null }, (doc, svg) => {
             if (doc) setItemDrawing(draft, addDrawing(name(), doc, svg));
             drawBox();
           });

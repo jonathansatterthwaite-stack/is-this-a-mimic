@@ -143,6 +143,87 @@ clockwork.value("char.local.*", { label: "A character's Local value", get: (c, n
 clockwork.value("local.*", { label: "An item's Local value, else its character's", get: (c, name) => c.char ? localValue(c.char.id, c.entry?.uid, name) : undefined });
 clockwork.value("global.*", { label: "A Global value", get: (c, name) => globalValue(name) });
 
+// ------------------------------------------------------------------ objects and scopes
+// (docs/clockwork-overhaul-plan.md) Everything interactive is an object of a kind: the world (the
+// campaign), a character, an item (a copy in an inventory), a drawing, a panel's control. A kind has
+// properties (the addresses above that belong to it), events (clockwork.event, in js/triggers.js) and
+// actions (clockwork.action). Drawings and controls get theirs in a later step.
+//
+// A rule says what it applies to (its scope, `appliesTo`): any mix of
+//   character: a character's id          item: a catalog item's id, or "template:<id>" (and those under it)
+//   drawing: a library drawing's id       panel: a GM panel's id
+// A part left out means any. A rule carried by an item (item.triggers) applies to that item.
+// Rules come from sources (clockwork.ruleSource): the item's own today, the campaign's rule book
+// later. For the same event on the same object, only the most specific rules run (they override
+// the rest); rules for other events all run.
+
+clockwork.kinds = new Map(); // name -> { name, label, addresses: [patterns] }
+clockwork.kind = (name, def) => clockwork.kinds.set(name, { name, addresses: [], ...def });
+clockwork.kind("world", { label: "The world", addresses: ["global.*"] });
+clockwork.kind("character", { label: "A character", addresses: ["char.*"] });
+clockwork.kind("item", { label: "An item", addresses: ["item.*", "local.*"] });
+clockwork.kind("drawing", { label: "A drawing" });
+clockwork.kind("panel", { label: "A panel's control" });
+// The kind of object an address is a property of.
+clockwork.kindOf = address => [...clockwork.kinds.values()].find(k => k.addresses.some(p =>
+  p === address || (p.endsWith(".*") && String(address).startsWith(p.slice(0, -1)))))?.name;
+
+const SCOPE_PARTS = ["character", "item", "drawing", "panel"];
+// What a context is, for scopes: its character, item (catalog id and template lineage), drawing, panel.
+function scopeFacts(ctx) {
+  const e = ctx.entry, it = e ? currentItem(e, ctx.char) : null;
+  return { character: ctx.char?.id, itemIds: it ? [e.srcId, it.id].filter(Boolean) : [],
+    templates: it ? templateLineage(itemTemplate(it)).map(t => t.id) : [], drawing: ctx.drawing ?? it?.iconLib, panel: ctx.panel };
+}
+// facts: the context's facts, or a function giving them (worked out only when a scope needs them).
+function scopeMatches(scope, ctx, facts) {
+  if (!scope) return true;
+  const f = () => typeof facts === "function" ? facts() : facts || (facts = scopeFacts(ctx));
+  for (const part of SCOPE_PARTS) {
+    const want = scope[part];
+    if (want == null) continue;
+    if (part === "item" && want === "self") { if (!ctx.entry) return false; continue; }
+    const is = f();
+    if (part === "item") {
+      const tpl = /^template:(.+)$/.exec(want);
+      if (tpl ? !is.templates.includes(tpl[1]) : !is.itemIds.includes(want)) return false;
+    } else if (is[part] !== want) return false;
+  }
+  return true;
+}
+// How specific a scope is: each part it names counts 100; for the item part, an exact item counts
+// more than a template, and a template further down the tree more than one above it.
+function scopeSpecificity(scope) {
+  let n = 0;
+  for (const part of SCOPE_PARTS) if (scope?.[part] != null) n += 100;
+  const item = scope?.item;
+  if (item != null) {
+    const tpl = /^template:(.+)$/.exec(item);
+    n += tpl ? Math.min(49, templateLineage(templateById(tpl[1])).length) : 50;
+  }
+  return n;
+}
+Object.assign(clockwork, { scopeMatches, scopeSpecificity });
+
+// Where rules come from: name -> (ctx) => [{ rule, scope }].
+clockwork.ruleSources = new Map();
+clockwork.ruleSource = (name, fn) => clockwork.ruleSources.set(name, fn);
+// The rules that apply to an object (ctx: { char, entry?, drawing?, panel? }), the most specific for
+// each event: [{ rule, scope, source, specificity }]. key(rule) says which event a rule is for.
+clockwork.rulesFor = (ctx, key = r => JSON.stringify([r.when, r.test || [], ...(r.button ? [r.button] : []), ...(r.signal ? [r.signal] : [])])) => {
+  let known = null;
+  const facts = () => known || (known = scopeFacts(ctx)), found = [];
+  for (const [source, fn] of clockwork.ruleSources) {
+    let list;
+    try { list = fn(ctx) || []; } catch { list = []; }
+    for (const x of list) if (x?.rule && scopeMatches(x.scope, ctx, facts)) found.push({ ...x, source, specificity: scopeSpecificity(x.scope) });
+  }
+  if (found.length < 2) return found;
+  const best = new Map();
+  for (const x of found) { const k = key(x.rule); best.set(k, Math.max(best.get(k) ?? -1, x.specificity)); }
+  return found.filter(x => x.specificity === best.get(key(x.rule)));
+};
+
 // ------------------------------------------------------------------ changing values
 // One way to change anything (docs/clockwork-plan.md, 2):
 //   clockwork.set(ctx, address, value, by)    by: "player", "gm" or "rule" (an item's trigger)

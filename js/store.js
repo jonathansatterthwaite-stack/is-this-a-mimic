@@ -522,20 +522,8 @@ function fillDeck(char, deck) {
 const cardsIn = (char, deck) => char.items.filter(e => e.parent === deck.uid && e.item.card);
 const cardsOut = (char, deck) => char.items.filter(e => e.fromDeck === deck.uid && e.parent !== deck.uid);
 
-// ------------------------------------------------------------------ container actions
-// What an item offers to do with what's in it (item.actions): each its own words (label) and one
-// of a few effects, then, if it says, a state of the item switched: "Shake one out" and "Fish one
-// out" are both a random one; "Smash it" is everything out, then Broken on.
-//   [{ label, effect: "random" | "choose" | "empty" | "fill", state?, on? }]
-const CONTAINER_EFFECTS = [["random", "Takes one out, at random"], ["choose", "Takes one out (you choose)"], ["empty", "Takes everything out"], ["fill", "Puts things in"]];
-// A set's, unless it has its own: "Draw a card" (one at random) and "Take all out".
-function itemActions(it) {
-  const own = (Array.isArray(it?.actions) ? it.actions : []).filter(a => a && a.label && CONTAINER_EFFECTS.some(([k]) => k === a.effect));
-  if (own.length || Array.isArray(it?.actions) || !deckList(it, it?.id)) return own;
-  const noun = pieceNoun(it);
-  return [{ label: noun === "card" ? "Draw a card" : "Take one at random", effect: "random" }, { label: "Take all out", effect: "empty" }];
-}
-
+// ------------------------------------------------------------------ taking things out
+// (an item's actions are rules: js/triggers.js, pressAction)
 // What's in a container that can come out (its main space: not its compartments, nor its outside).
 const takeable = (char, holder) => char.items.filter(e => e.parent === holder.uid && !compartmentOf(char, e));
 
@@ -575,6 +563,28 @@ function takeRandom(char, holder, random = Math.random) {
   let r = Math.floor(random() * total);
   const e = list.find(x => (r -= x.qty) < 0);
   return takeOutOf(char, holder, e, 1);
+}
+
+// Put n of an entry (taken out of a container) back into it: the rest of a stack it joined stays,
+// and a stack of the same thing in there takes them.
+function returnInto(char, holderUid, entryUid, n) {
+  const x = char.items.find(e => e.uid === entryUid);
+  if (!x || !char.items.some(e => e.uid === holderUid)) return;
+  n = Math.min(n, x.qty);
+  const same = stacks(x.item, x.srcId) && char.items.find(y => y !== x && y.parent === holderUid && !entryComp(y) && y.srcId === x.srcId
+    && JSON.stringify(y.item) === JSON.stringify(x.item));
+  if (same) {
+    same.qty += n;
+    x.qty -= n;
+    if (x.qty <= 0) char.items = char.items.filter(y => y !== x);
+    return;
+  }
+  if (n < x.qty) {
+    x.qty -= n;
+    const part = { ...clone(x), uid: uid(), qty: n };
+    placeEntry(part, holderUid, null);
+    char.items.push(part);
+  } else placeEntry(x, holderUid, null);
 }
 
 // Draw pieces at random: out of the set to where the set is (they're then ordinary items).
@@ -649,7 +659,7 @@ function packPlan(pack) {
     holder = rows.find(r => !r.place && hasFeature(r.item, "holds", r.item?.id) && (r.item.capacityLb > 0 || r.item.weightless));
     if (holder) holder.place = "holder";
   }
-  const straps = !!holder && (!!strapSpace({ item: holder.item, srcId: holder.item?.id }) || /backpack/i.test(holder.name));
+  const straps = !!holder && !!strapSpace({ item: holder.item, srcId: holder.item?.id });
   for (const r of rows) {
     if (r.place === "holder" && r !== holder) r.place = "in"; // only one container holds the rest
     if (!r.place) r.place = !holder ? "loose" : straps && STRAPPABLE.test(r.name) ? "strap" : "in";
@@ -803,7 +813,6 @@ function fillLevel(char, e) {
 // contentsView "inherit" (or none): as the container shows its own. An entry in one says so
 // (e.compartment). One that's gone: the main space.
 const OUTSIDE = "out";
-const outsideCompartment = () => ({ id: OUTSIDE, name: "Strapped outside", capacity: "separate", contentsView: "list" });
 function compartmentsOf(e) {
   const it = e?.item;
   if (!it) return [];
@@ -863,7 +872,6 @@ const spaceOver = (char, holder, comp) => {
 // Where gear strapped to it goes (a pack's bedroll and rope): its outside (backpacks), else a
 // compartment with a capacity of its own; none: inside.
 const strapSpace = e => { const ks = compartmentsOf(e); return ks.find(c => c.id === OUTSIDE) || ks.find(c => c.capacity === "separate") || null; };
-const canStrap = e => !!strapSpace(e);
 
 function childrenOf(char, parentUid) { return char.items.filter(e => e.parent === parentUid); }
 

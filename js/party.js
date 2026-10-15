@@ -290,6 +290,8 @@ const party = {
     if (typeof snap.time === "number") this.clockOffset = snap.time - Date.now();
     this.role = snap.role || "player";
     this.isHostDevice = !!snap.isHost;
+    // The GM device that runs the campaign's world rules (one, however many GMs: js/triggers.js).
+    this.runsWorld = !!snap.runsWorld;
     this.devices = snap.devices || [];
     this.campaign = snap.campaign || null;
   },
@@ -315,7 +317,9 @@ const party = {
       // Values only a GM sets (states' limits); players set their other Locals (js/clockwork.js).
       gmOnly: systemStates(sysOf(camp)).map(limitValueName).filter(Boolean).map(valueKey),
       // Rules, values and controls (js/clockwork.js): off for everyone when the GM says so.
-      clockwork: camp.clockwork !== false });
+      clockwork: camp.clockwork !== false,
+      // The campaign's rule book (js/triggers.js): every device runs its own share of it.
+      rules: Array.isArray(camp.rules) ? camp.rules : [] });
   },
 
   // The game system the GM's campaign plays.
@@ -463,7 +467,7 @@ const party = {
     kv.remove(JOINED_KEY);
     clearInterval(this.retryTimer);
     for (const t of this.timers.values()) clearTimeout(t);
-    Object.assign(this, { active: false, connected: false, base: "", info: null, token: null, chars: [], trades: [], shops: [], gm: {}, role: "player", isHostDevice: false, devices: [], campaign: null, unreachable: null });
+    Object.assign(this, { active: false, connected: false, base: "", info: null, token: null, chars: [], trades: [], shops: [], gm: {}, role: "player", isHostDevice: false, runsWorld: false, devices: [], campaign: null, unreachable: null });
     this.synced = new Map();
     this.undecided = new Set();
     this.uploaded = new Set();

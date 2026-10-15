@@ -222,6 +222,25 @@ def clean_own_states(raw):
     return out
 
 
+RULES_MAX = 200
+RULES_MAX_BYTES = 200_000
+
+
+def clean_rules(raw):
+    """The campaign's rule book (js/triggers.js): kept as the GM's device sent it, within limits.
+    Every device checks each rule itself before it runs (cleanTriggers), so the host only keeps
+    the list sane: objects, at most RULES_MAX, at most RULES_MAX_BYTES in all."""
+    out, size = [], 0
+    for r in (raw if isinstance(raw, list) else [])[:RULES_MAX]:
+        if not isinstance(r, dict):
+            continue
+        size += len(json.dumps(r))
+        if size > RULES_MAX_BYTES:
+            break
+        out.append(r)
+    return out
+
+
 def clean_system_ref(raw):
     """The game system a campaign plays, as the GM's device names it ({id, name}), or None."""
     if not isinstance(raw, dict) or not raw.get("id"):
@@ -304,6 +323,13 @@ def role_of(token, host):
     if token and token in gms:
         return "gm"
     return "gm" if host and not gms else "player"
+
+
+def world_runner():
+    """Which GM device runs the campaign's world rules (js/triggers.js): one, so a rule doesn't run
+    once per GM. The first GM connected, else the first GM."""
+    gms = state.get("gms") or []
+    return next((t for t in gms if online.get(t, 0) > 0), gms[0] if gms else None)
 
 
 def device_id(token):
@@ -481,6 +507,8 @@ def snapshot(token, host=False):
                      if mine & set(s["to"]) or (gm_view and s["gm"]) or s["by"] == token]
     if gm_view:
         snap["discards"] = state.get("discards", [])
+        # With no GMs chosen the host is the GM; else one GM device runs the world rules.
+        snap["runsWorld"] = token == world_runner() if state.get("gms") else bool(host)
     if host:
         snap["devices"] = device_list(token)
     return snap
@@ -1567,7 +1595,7 @@ class Handler(SimpleHTTPRequestHandler):
         raise ApiError(404, "Unknown endpoint")
 
     def campaign_api(self, method, token):
-        """POST /api/campaign {id, name, system, currency, states, gmOnly, clockwork, shops, gmValues}: a GM loads one of their campaigns into
+        """POST /api/campaign {id, name, system, currency, states, gmOnly, clockwork, rules, shops, gmValues}: a GM loads one of their campaigns into
         the party (see switch_campaign). Shops and GM values seed a campaign the party hasn't played
         yet; every device plays its game system (system: {id, name}, or null for none)."""
         if method != "POST":
@@ -1597,6 +1625,8 @@ class Handler(SimpleHTTPRequestHandler):
             state["campaign"]["clockwork"] = body.get("clockwork") is not False
             # The campaign's own item states, for players' devices.
             state["campaign"]["ownStates"] = clean_own_states(body.get("ownStates"))
+            # The campaign's rule book (Clockwork): every device runs its own share of it.
+            state["campaign"]["rules"] = clean_rules(body.get("rules"))
             changed(persist=False)
         print(f"  * The GM loaded the campaign {name}")
         return {"ok": True}

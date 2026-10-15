@@ -1,8 +1,13 @@
 // Rules: an item's "when → do", Clockwork's way of making items react (docs/clockwork-plan.md, 4;
 // values and addresses in js/clockwork.js, item states and layers in js/system.js).
 //
-//   item.triggers: [rule]   (the editor calls them rules)
-//   rule: { when, test?, if?, every?, do: [action], message? }
+//   item.triggers: [rule]   (the editor calls them rules), and the campaign's rule book, campaign.rules
+//   rule: { id?, name?, when, test?, if?, every?, do: [action], message?, appliesTo? }
+//     appliesTo: { character?, item?, drawing?, panel? } (js/clockwork.js: scopes). A rule an item
+//       carries applies to that item (and can name a character too). A rule-book rule's scope sets
+//       its level: an item, template, drawing or panel named: it runs for those items; only a
+//       character: for that character; nothing: the world, on the GM's device, where it may set
+//       Global values and open or close shops.
 //     when: "becomes"   once, as the conditions in test all turn true (from any change: the
 //                       player, the GM, a trade, a panel, another rule)
 //           "while"     every `every` seconds (default 1) while they all hold (the game tick)
@@ -14,6 +19,11 @@
 //     do:   actions, from the registry (clockwork.action): { set: address, to }, { add: address,
 //           by }, { change: address, rate, until? } (a moving value), { message }
 //     message: shown to the player
+//   An item's actions are rules too: { when: "used", button: "Draw a card", do: […] } makes a button
+//   in its details and menu (pressAction runs it); { when: "signal", signal: "Flame" } runs when a
+//   hotspot of its drawing says so. Their Do can also take things out of it, put things in, use
+//   some of it, show its details or use another of its actions (actions marked press: they ask
+//   the person, so they only run from a press, never by themselves).
 //
 // Rules run on the device a character belongs to, after every change and every party update
 // (render calls runTriggers), and "while" rules on the game tick. Each entry keeps, in entry.seen,
@@ -25,8 +35,17 @@
 
 const RULE_STEPS = 10;
 const RULE_OPS = [["=", "is"], ["!=", "isn't"], ["<", "is under"], ["<=", "is at most"], [">", "is over"], [">=", "is at least"], ["between", "is between"]];
-const RULE_WHEN = [["becomes", "A condition becomes true"], ["while", "While a condition holds"], ["acquired", "It enters the inventory"],
-  ["equipped", "It's equipped"], ["unequipped", "It's unequipped"]];
+// What a rule can be for: Clockwork's events (any object's, or one kind's), in the editor's order.
+clockwork.events = new Map(); // name -> { name, label, kind? }
+clockwork.event = (name, def) => clockwork.events.set(name, { name, ...def });
+clockwork.event("becomes", { label: "A condition becomes true" });
+clockwork.event("while", { label: "While a condition holds" });
+clockwork.event("acquired", { label: "It enters the inventory", kind: "item" });
+clockwork.event("equipped", { label: "It's equipped", kind: "item" });
+clockwork.event("unequipped", { label: "It's unequipped", kind: "item" });
+clockwork.event("used", { label: "It's used (a button)", kind: "item", pressed: true });
+clockwork.event("signal", { label: "A hotspot is used", kind: "item", pressed: true });
+const RULE_WHEN = [...clockwork.events.values()].map(e => [e.name, e.label]);
 
 // ------------------------------------------------------------------ formulas
 // A small, safe evaluator (no eval): numbers, addresses (local.heat, item.charges…), + - * / % ^,
@@ -125,21 +144,109 @@ const ruleActions = new Map(); // name -> { key (its field), label, run(ctx, a) 
 clockwork.action = (name, def) => ruleActions.set(name, { name, ...def });
 const actionOf = a => a && typeof a === "object" ? [...ruleActions.values()].find(d => d.key in a) : undefined;
 // What a rule may change: an item's states and charges, and Local values.
-const RULE_SETTABLE = /^(item\.state\.[\w-]+|item\.charges|local\.[A-Za-z]\w*|char\.local\.[A-Za-z]\w*)$/;
+// (Global values only from world rules, which run as the GM: clockwork.set refuses the rest.)
+const RULE_SETTABLE = /^(item\.state\.[\w-]+|item\.charges|local\.[A-Za-z]\w*|char\.local\.[A-Za-z]\w*|global\.[A-Za-z]\w*)$/;
 
 clockwork.action("set", { key: "set", label: "Set",
   check: a => typeof a.set === "string" && RULE_SETTABLE.test(a.set) && (typeof a.to === "number" || (typeof a.to === "string" && a.to !== "")),
-  run: (ctx, a) => clockwork.set(ctx, a.set, a.set.startsWith("item.state.") ? !!ruleNumber(ctx, a.to, a.set) : ruleNumber(ctx, a.to, a.set), "rule"),
+  run: (ctx, a) => clockwork.set(ctx, a.set, a.set.startsWith("item.state.") ? !!ruleNumber(ctx, a.to, a.set) : ruleNumber(ctx, a.to, a.set), ctx.by || "rule"),
   words: a => a.set.startsWith("item.state.") ? `turn ${addressLabel(a.set)} ${ruleNumber({}, a.to) ? "on" : "off"}` : `set ${addressLabel(a.set)} to ${a.to}` });
 clockwork.action("add", { key: "add", label: "Add",
   check: a => typeof a.add === "string" && RULE_SETTABLE.test(a.add) && !a.add.startsWith("item.state.") && (typeof a.by === "number" || (typeof a.by === "string" && a.by !== "")),
-  run: (ctx, a) => clockwork.set(ctx, a.add, (ruleRead(ctx, a.add) ?? 0) + ruleNumber(ctx, a.by, a.add), "rule"),
+  run: (ctx, a) => clockwork.set(ctx, a.add, (ruleRead(ctx, a.add) ?? 0) + ruleNumber(ctx, a.by, a.add), ctx.by || "rule"),
   words: a => `${String(a.by).trim().startsWith("-") ? "take" : "add"} ${String(a.by).replace(/^\s*-/, "")} ${String(a.by).trim().startsWith("-") ? "from" : "to"} ${addressLabel(a.add)}` });
 clockwork.action("change", { key: "change", label: "Change over time",
-  check: a => typeof a.change === "string" && /^(local|char\.local)\.[A-Za-z]\w*$/.test(a.change) && Number.isFinite(a.rate) && a.rate !== 0,
-  run: (ctx, a) => clockwork.set(ctx, a.change, { rate: a.rate, ...(typeof a.until === "number" ? { until: a.until } : {}) }, "rule"),
+  check: a => typeof a.change === "string" && /^(local|char\.local|global)\.[A-Za-z]\w*$/.test(a.change) && Number.isFinite(a.rate) && a.rate !== 0,
+  run: (ctx, a) => clockwork.set(ctx, a.change, { rate: a.rate, ...(typeof a.until === "number" ? { until: a.until } : {}) }, ctx.by || "rule"),
   words: a => `start ${addressLabel(a.change)} ${a.rate > 0 ? "rising" : "falling"} ${Math.abs(a.rate)} a second` + (typeof a.until === "number" ? ` to ${a.until}` : "") });
-clockwork.action("message", { key: "message", label: "Message",
+// Open or close a shop: a world rule's (the GM's device), as the GM's own switch does.
+clockwork.action("shop", { key: "shop", label: "Open or close a shop", level: "world",
+  check: a => typeof a.shop === "string" && a.shop !== "" && (a.open === 0 || a.open === 1),
+  run: (ctx, a) => {
+    const shop = ctx.by === "gm" && typeof shopStore !== "undefined" ? shopStore.find(a.shop) : null;
+    if (!shop) return { ok: false };
+    if (!!shop.open !== !!a.open) shopStore.save({ ...clone(shop), open: !!a.open }).catch(() => {});
+    return { ok: true };
+  },
+  words: a => `${a.open ? "open" : "close"} ${(typeof shopStore !== "undefined" && shopStore.find(a.shop)?.name) || "a shop"}` });
+// What only a press does (a button, a hotspot): they ask the person, or open something. Their
+// press(ctx, a) runs on this device, on the entry as it is now, and may wait for a choice.
+const pressNamed = x => `${entryName(x)}${x.qty > 1 ? ` ×${x.qty}` : ""}`;
+const pickFrom = (title, list, row) => new Promise(done => {
+  let close, picked = false;
+  close = openModal(title, h("div", { class: "group move-to" }, list.map(x => h("button", { type: "button", class: "row row-main switch",
+    onclick: () => { picked = true; close(); done(x); } }, row(x)))));
+  const panel = close.panel, obs = new MutationObserver(() => { if (!panel.isConnected) { obs.disconnect(); if (!picked) done(null); } });
+  obs.observe(document.body, { childList: true, subtree: true });
+});
+// { take: "random" | "choose" | "all", to?: "window" } (into a window, else straight into the inventory)
+clockwork.action("take", { key: "take", label: "Take out of it", press: true,
+  check: a => ["random", "choose", "all"].includes(a.take) && (a.to == null || a.to === "window" || a.to === "inventory"),
+  words: a => (a.take === "random" ? "take one out at random" : a.take === "choose" ? "take one out (you choose)" : "take everything out") + (a.to === "window" ? " into a window" : ""),
+  async press(ctx, a, label) {
+    const char = store.char(), e = char.items.find(x => x.uid === ctx.entry.uid), inside = e ? takeable(char, e) : [];
+    if (!e) return false;
+    if (!inside.length) { toast(`The ${entryName(e)} is empty`); return false; }
+    const toWindow = a.to === "window";
+    if (a.take === "random" && toWindow) { openDraw(e.uid); return true; } // (the window takes it, and offers another)
+    if (a.take === "choose") {
+      const x = await pickFrom(label, inside, x => sealedHere(e) ? h("div", { class: "row-title" }, "Something")
+        : [itemIcon(currentItem(x, char), "row-icon"), h("div", { class: "row-title" }, pressNamed(x))]);
+      if (!x) return false;
+      let got = null;
+      commit((s, c) => { const holder = c.items.find(i => i.uid === e.uid), y = c.items.find(i => i.uid === x.uid); if (holder && y) got = takeOutOf(c, holder, y, 1); },
+        toWindow ? null : `${label}: ${entryName(x)}`, true);
+      if (toWindow && got) openDraw(e.uid, 1, [{ uid: got.uid, n: 1 }]);
+      return true;
+    }
+    const got = [], taken = [];
+    commit((s, c) => {
+      const holder = c.items.find(i => i.uid === e.uid);
+      if (!holder) return;
+      if (a.take === "random") { const x = takeRandom(c, holder); if (x) { got.push(entryName(x)); taken.push({ uid: x.uid, n: 1 }); } }
+      else for (const x of takeable(c, holder)) { const n = x.qty; got.push(pressNamed(x)); const y = takeOutOf(c, holder, x); if (y) taken.push({ uid: y.uid, n }); }
+    }, null, true);
+    if (toWindow) openDraw(e.uid, 1, taken);
+    else toast(`${label}: ${got.join(", ") || "nothing"}`, null);
+    return true;
+  } });
+clockwork.action("putIn", { key: "putIn", label: "Put things in", press: true,
+  check: a => a.putIn === 1,
+  words: () => "put something in",
+  async press(ctx, a, label) {
+    const char = store.char(), e = char.items.find(x => x.uid === ctx.entry.uid);
+    if (!e) return false;
+    const fits = char.items.filter(x => x.uid !== e.uid && x.parent !== e.uid && !inDeck(char, x) && !isDescendant(char, x.uid, e.uid)
+      && !isDescendant(char, e.uid, x.uid) && containerAllows(e, x.item, x.srcId) && !hiddenFromMe(char, x));
+    if (!fits.length) { toast(`Nothing you carry goes in the ${entryName(e)}`); return false; }
+    const x = await pickFrom(label, fits, x => [itemIcon(currentItem(x, char), "row-icon"), h("div", { class: "row-title" }, pressNamed(x))]);
+    if (!x) return false;
+    moveEntry(x.uid, e.uid, false);
+    return true;
+  } });
+clockwork.action("use", { key: "use", label: "Use some", press: true,
+  check: a => Number.isFinite(a.use) && a.use !== 0 && Math.abs(a.use) <= 1000,
+  words: a => a.use > 0 ? (a.use === 1 ? "use one" : `use ${a.use}`) : (a.use === -1 ? "add one" : `add ${-a.use}`),
+  async press(ctx, a) {
+    const e = store.char()?.items.find(x => x.uid === ctx.entry.uid);
+    if (!e) return false;
+    if (!canCount(e)) { toast("In Play mode only things like ammunition, rations and potions are counted"); return false; }
+    setEntryQty(e, e.qty - a.use);
+    return true;
+  } });
+clockwork.action("details", { key: "details", label: "Show its details", press: true,
+  check: a => a.details === 1,
+  words: () => "show its details",
+  async press(ctx, a, label, env) {
+    if (env?.panel?.classList.contains("icon-focus")) env.panel.querySelector(".icon-focus-switch input")?.click();
+    else if (!env?.panel) openEntry(ctx.entry.uid);
+    return true;
+  } });
+clockwork.action("press", { key: "press", label: "Use another of its actions", press: true,
+  check: a => typeof a.press === "string" && a.press.trim() !== "" && a.press.length <= 40,
+  words: a => `use “${a.press}”`,
+  async press(ctx, a, label, env) { return pressAction(ctx.entry.uid, a.press, { ...env, depth: (env?.depth || 0) + 1 }); } });
+clockwork.action("message", { key: "message", label: "Say",
   check: a => typeof a.message === "string" && a.message.trim() !== "",
   run: (ctx, a) => ({ ok: true, message: a.message }),
   words: a => `say “${a.message}”` });
@@ -158,8 +265,35 @@ function rulesOf(item) {
   if (!rules) rulesCache.set(list, rules = cleanTriggers(list).map(ruleOf).filter(Boolean));
   return rules;
 }
-// What tells one rule from another in entry.seen (edited conditions start afresh).
-const ruleKey = r => JSON.stringify([r.when, r.test || []]);
+// What tells one rule from another in entry.seen (edited conditions start afresh), and which event
+// it's for (the most specific of rules for the same one run: clockwork.rulesFor).
+const ruleKey = r => JSON.stringify([r.when, r.test || [], ...(r.button ? [r.button] : []), ...(r.signal ? [r.signal] : [])]);
+// The rules an item carries apply to it (unless they say more: appliesTo).
+clockwork.ruleSource("item", ctx => ctx.entry ? rulesOf(ctx.entry.item).map(rule => ({ rule, scope: { item: "self", ...(rule.appliesTo || {}) } })) : []);
+// The campaign's rule book: in a party, the host's copy (every device, GMs too: a second GM's own
+// campaign may differ); else this device's campaign. Checked as an item's rules are, once per list.
+function bookRules() {
+  const list = party.active ? party.campaign?.rules : store.campaign()?.rules;
+  if (!Array.isArray(list)) return [];
+  let rules = rulesCache.get(list);
+  if (!rules) rulesCache.set(list, rules = cleanTriggers(list).map(ruleOf).filter(Boolean));
+  return rules;
+}
+// A rule's level, from what it applies to: "item", "character" or "world".
+const ruleLevel = scope => !scope ? "world" : scope.item || scope.drawing || scope.panel ? "item" : scope.character ? "character" : "world";
+const ctxLevel = ctx => ctx.entry ? "item" : ctx.char ? "character" : "world";
+clockwork.ruleSource("book", ctx => bookRules().filter(r => ruleLevel(r.appliesTo) === ctxLevel(ctx)).map(rule => ({ rule, scope: rule.appliesTo || {} })));
+// A set (a deck of cards) with no actions of its own: Draw a card (one at random) and Take all out.
+clockwork.ruleSource("set", ctx => {
+  if (!ctx.entry || !deckList(ctx.entry.item)) return []; // (most items: not a set, and no need to work out more)
+  const it = currentItem(ctx.entry, ctx.char);
+  if (!deckList(it) || rulesOf(it).some(r => r.when === "used")) return [];
+  const noun = pieceNoun(it);
+  return [{ rule: { when: "used", button: noun === "card" ? "Draw a card" : "Take one at random", do: [{ take: "random", to: "window" }] }, scope: { item: "self" } },
+    { rule: { when: "used", button: "Take all out", do: [{ take: "all" }] }, scope: { item: "self" } }];
+});
+// The rules that run for an entry: from every source, the most specific for each event.
+const entryRules = (char, e) => clockwork.rulesFor({ char, entry: e }, ruleKey).map(x => x.rule);
 
 // The addresses a rule reads (its conditions) and writes (its actions).
 function ruleAddresses(r) {
@@ -193,23 +327,47 @@ function tooOften(id) {
   return list.length > 25;
 }
 
-// Do a rule's actions (if its `if` holds): returns the messages.
-function fireRule(char, e, r) {
-  const ctx = { char, entry: e }, out = [];
+// Do a rule's actions (if its `if` holds) for an object: an item (ctx { char, entry }), a character
+// ({ char }) or the world ({ by: "gm" }). Returns the messages.
+function fireRule(ctx, r) {
+  const out = [], e = ctx.entry, who = e ? entryName(e) : ctx.char ? ctx.char.name : "";
+  const say = m => out.push(who ? `${who}: ${m}` : m);
   if (!allHold(ctx, r.if)) return out;
-  const id = `${char.id}/${e.uid}/${ruleKey(r)}`;
+  const id = `${ctx.char?.id || "world"}/${e?.uid || ""}/${ruleKey(r)}`;
   if (tooOften(id)) {
-    if (ruleFires.get(id).length === 26) out.push(`${entryName(e)}: a rule is firing too often, so it's held back`);
+    if (ruleFires.get(id).length === 26) say("a rule is firing too often, so it's held back");
     return out;
   }
   for (const a of r.do || []) {
     const d = actionOf(a);
-    if (!d || !d.check(a)) continue;
+    if (!d || !d.check(a) || d.press) continue; // (those wait for a press: pressAction)
     const res = d.run(ctx, a) || {};
-    if (res.message) out.push(`${entryName(e)}: ${res.message}`);
-    if (res.warning) out.push(`${entryName(e)}: ${res.warning}`);
+    if (res.message) say(res.message);
+    if (res.warning) say(res.warning);
   }
-  if (r.message) out.push(`${entryName(e)}: ${r.message}`);
+  if (r.message) say(r.message);
+  return out;
+}
+
+// World rules run on the GM's device: outside a party, in the GM role; in one, on the one GM device
+// the host chooses (runsWorld), so a rule doesn't run once per GM.
+const runsWorldRules = () => clockworkOn() && isGmDevice() && (!party.active || party.runsWorld);
+// The objects other than items that rules run for on this device: its characters, and the world.
+function levelContexts() {
+  const out = store.state.characters.map(c => ({ ctx: { char: c }, id: "char:" + c.id }));
+  if (runsWorldRules()) out.push({ ctx: { by: "gm" }, id: "world" });
+  return out;
+}
+// Character and world rules' "becomes": whether each held last time (kept in memory: the first
+// look after the app starts is taken as it is, so nothing fires for what was already true).
+const levelSeen = new Map(); // id -> { ruleKey: held }
+function runLevelRules({ ctx, id }) {
+  const rules = clockwork.rulesFor(ctx, ruleKey).map(x => x.rule).filter(r => r.when === "becomes");
+  const before = levelSeen.get(id), now = {}, out = [];
+  for (const r of rules) now[ruleKey(r)] = allHold(ctx, r.test);
+  levelSeen.set(id, now);
+  if (!before || !clockworkOn()) return out;
+  for (const r of rules) if (now[ruleKey(r)] && before[ruleKey(r)] === false) out.push(...fireRule(ctx, r));
   return out;
 }
 
@@ -219,7 +377,7 @@ function runCharTriggers(char) {
   const messages = [];
   for (const e of char.items) {
     for (let step = 0; step < RULE_STEPS; step++) {
-      const rules = rulesOf(e.item), ctx = { char, entry: e };
+      const rules = entryRules(char, e), ctx = { char, entry: e };
       const becomes = rules.filter(r => r.when === "becomes");
       const holds = Object.fromEntries(becomes.map(r => [ruleKey(r), allHold(ctx, r.test)]));
       let fire;
@@ -237,7 +395,7 @@ function runCharTriggers(char) {
       e.seen = next;
       if (!fire.length && !isNew) break;
       if (!clockworkOn()) break; // switched off: kept up to date, but nothing fires
-      for (const r of fire) messages.push(...fireRule(char, e, r));
+      for (const r of fire) messages.push(...fireRule({ char, entry: e }, r));
       fired += fire.length;
       if (!fire.length) break;
     }
@@ -260,6 +418,7 @@ function runTriggers() {
       fired += r.fired;
       messages.push(...r.messages);
     }
+    for (const lc of levelContexts()) messages.push(...runLevelRules(lc));
     if (changed) store.save();
     if (messages.length) toast(messages.join(" · "));
     return fired;
@@ -272,24 +431,76 @@ function runTriggers() {
 // time away (asleep, hidden) one that's due runs once.
 const whileLast = new Map(); // "charId/uid/key" -> when it last ran (ms)
 function hasWhileRules() {
-  return clockworkOn() && store.state.characters.some(c => c.items.some(e => rulesOf(e.item).some(r => r.when === "while")));
+  return clockworkOn() && (store.state.characters.some(c => c.items.some(e => entryRules(c, e).some(r => r.when === "while")))
+    || levelContexts().some(({ ctx }) => clockwork.rulesFor(ctx, ruleKey).some(x => x.rule.when === "while")));
 }
 function runWhileRules(now = Date.now()) {
   const messages = [];
   let ran = false;
-  for (const c of store.state.characters) for (const e of c.items) for (const r of rulesOf(e.item)) {
+  const due = [];
+  for (const c of store.state.characters) for (const e of c.items) for (const r of entryRules(c, e)) due.push({ ctx: { char: c, entry: e }, r, id: `${c.id}/${e.uid}/${ruleKey(r)}` });
+  for (const { ctx, id } of levelContexts()) for (const x of clockwork.rulesFor(ctx, ruleKey)) due.push({ ctx, r: x.rule, id: `${id}/${ruleKey(x.rule)}` });
+  for (const { ctx, r, id } of due) {
     if (r.when !== "while") continue;
-    const id = `${c.id}/${e.uid}/${ruleKey(r)}`;
-    if (!allHold({ char: c, entry: e }, r.test)) { whileLast.delete(id); continue; }
+    if (!allHold(ctx, r.test)) { whileLast.delete(id); continue; }
     const every = Math.max(0.25, typeof r.every === "number" ? r.every : 1) * 1000;
     if (!whileLast.has(id)) { whileLast.set(id, now); continue; } // the first comes a full interval after it starts holding
     if (now - whileLast.get(id) < every - 20) continue;
     whileLast.set(id, now);
     ran = true;
-    messages.push(...fireRule(c, e, r));
+    messages.push(...fireRule(ctx, r));
   }
   if (ran) store.update(() => {}); // save, and redraw (its changes can fire "becomes" rules)
   if (messages.length) toast(messages.join(" · "));
+}
+
+// ------------------------------------------------------------------ pressing an item's action
+
+// An item's actions: its "used" rules (from every source, the most specific for each button), in
+// order. [{ label, rule }]
+function itemButtons(char, e) {
+  const seen = new Set(), out = [];
+  for (const r of entryRules(char, e)) if (r.when === "used" && !seen.has(r.button)) { seen.add(r.button); out.push({ label: r.button, rule: r }); }
+  return out;
+}
+// What an action's icon is: a die for one at random, a bag for taking out, a plus for putting in.
+function buttonIcon(r) {
+  const a = (r.do || []).find(x => actionOf(x)?.press);
+  return a?.take === "random" ? "dice" : a?.take ? "bag" : a?.putIn ? "plus" : "wand";
+}
+// Press one of an item's actions (a button), or a hotspot's signal: its rules' actions, in order,
+// on this device. env: { panel (the details it was pressed in), depth (actions using actions) }.
+// Returns whether anything ran.
+async function pressAction(entryUid, button, env = {}, when = "used") {
+  if ((env.depth || 0) > 5) return false;
+  const char = store.char(), e = char?.items.find(x => x.uid === entryUid);
+  if (!e) return false;
+  const rules = entryRules(char, e).filter(r => r.when === when && (when === "used" ? r.button === button : r.signal === button));
+  let ran = false;
+  for (const r of rules) {
+    if (!allHold({ char, entry: e }, r.if)) continue;
+    for (const a of r.do || []) {
+      const d = actionOf(a);
+      if (!d || !d.check(a)) continue;
+      const now = store.char(), x = now?.items.find(i => i.uid === entryUid);
+      if (!x) return ran;
+      if (d.press) {
+        const ok = await d.press({ char: now, entry: x }, a, r.button || r.signal, env);
+        ran = true;
+        if (!ok && (a.take || a.putIn)) break; // (nothing to take, or nothing chosen: the rest waits)
+        continue;
+      }
+      const said = [];
+      store.update(s => {
+        const c = s.characters.find(c => c.id === now.id), y = c?.items.find(i => i.uid === entryUid);
+        if (y) { const res = d.run({ char: c, entry: y }, a) || {}; if (res.message) said.push(res.message); if (res.warning) said.push(res.warning); }
+      });
+      if (said.length) toast(said.join(" · "));
+      ran = true;
+    }
+    if (r.message) toast(r.message);
+  }
+  return ran;
 }
 
 // ------------------------------------------------------------------ in words
@@ -329,6 +540,8 @@ function ruleWordsOf(r) {
   const every = n => n === 1 ? "second" : `${n} seconds`;
   const when = r.when === "becomes" ? `When ${(r.test || []).map(becomes).join(" and ")}`
     : r.when === "while" ? `Every ${every(r.every ?? 1)} while ${(r.test || []).map(ruleCondWords).join(" and ")}`
+    : r.when === "used" ? `When “${r.button}” is used`
+    : r.when === "signal" ? `When the hotspot “${r.signal}” is used`
     : "When " + ({ acquired: "it enters the inventory", equipped: "it's equipped", unequipped: "it's unequipped" }[r.when] || r.when);
   const cond = r.if?.length ? `, if ${r.if.map(ruleCondWords).join(" and ")}` : "";
   const acts = (r.do || []).map(a => actionOf(a)?.words(a)).filter(Boolean);
@@ -369,92 +582,6 @@ function addressInput(value, onChange, settable, label) {
 // A number stays a number; anything else is kept as typed (on, a choice, a formula).
 const ruleTo = s => /^\s*-?\d+(\.\d+)?\s*$/.test(s) ? +s : s.trim();
 
-// A list of rules (an item's or a template's), edited in place in `owner.triggers`.
-function triggersEditor(owner) {
-  owner.triggers = (owner.triggers || []).map(ruleOf).filter(Boolean).map(clone);
-  const box = h("div", { class: "triggers-edit" });
-  const states = systemStates();
-  const condRows = (list, label) => h("div", { class: "rule-conds" }, list.map((c, i) => h("div", { class: "trigger-line rule-cond" },
-    addressInput(c.value, v => { c.value = v; }, false, `${label}: which value`),
-    h("select", { "aria-label": "Compared how", onchange: ev => { c.op = ev.target.value; draw(); } },
-      RULE_OPS.map(([op, words]) => h("option", { value: op, selected: c.op === op }, words))),
-    h("input", { type: "text", class: "rule-to", value: c.to ?? "", "aria-label": "To", placeholder: "1, on, a choice or a formula",
-      onchange: ev => { c.to = ruleTo(ev.target.value); } }),
-    c.op === "between" && h("input", { type: "text", class: "rule-to", value: c.to2 ?? "", "aria-label": "And", placeholder: "and",
-      onchange: ev => { c.to2 = ruleTo(ev.target.value); } }),
-    iconBtn("x", "Remove this condition", () => { list.splice(i, 1); draw(); }))));
-  const firstState = () => states[0] ? `item.state.${states[0].key}` : "item.charges";
-  const actionRow = (r, a, i) => {
-    const d = actionOf(a);
-    const kind = h("select", { "aria-label": "Do what", onchange: ev => {
-      const k = ev.target.value, target = a.set || a.add || a.change || firstState();
-      r.do[i] = k === "set" ? { set: target, to: 1 } : k === "add" ? { add: target.startsWith("item.state.") ? "item.charges" : target, by: 1 }
-        : k === "change" ? { change: /^(local|char\.local)\./.test(target) ? target : "local.heat", rate: 1 } : { message: "" };
-      draw();
-    } }, [...ruleActions.values()].map(x => h("option", { value: x.name, selected: d === x }, x.label)));
-    const fields = !d ? [] : d.key === "message"
-      ? [h("input", { type: "text", class: "rule-msg", value: a.message, maxlength: 200, "aria-label": "Message", placeholder: "e.g. The wand crumbles to dust.",
-          oninput: ev => { a.message = ev.target.value; } })]
-      : d.key === "change"
-      ? [addressInput(a.change, v => { a.change = v; }, true, "Which value"),
-         h("input", { type: "number", step: "any", class: "rule-num", value: a.rate, "aria-label": "How much a second", title: "How much a second (negative to go down)",
-           onchange: ev => { a.rate = +ev.target.value; } }), h("span", { class: "muted small" }, "a second, to"),
-         h("input", { type: "number", step: "any", class: "rule-num", value: a.until ?? "", "aria-label": "Stops at", placeholder: "never",
-           onchange: ev => { if (ev.target.value === "") delete a.until; else a.until = +ev.target.value; } })]
-      : [addressInput(a[d.key], v => { a[d.key] = v; }, true, "Which value"), h("span", { class: "muted small" }, d.key === "set" ? "to" : "by"),
-         h("input", { type: "text", class: "rule-to", value: a[d.key === "set" ? "to" : "by"] ?? "", "aria-label": d.key === "set" ? "To" : "By",
-           placeholder: d.key === "set" ? "1, on, or a formula" : "1, -1, or a formula", onchange: ev => { a[d.key === "set" ? "to" : "by"] = ruleTo(ev.target.value); } })];
-    return h("div", { class: "trigger-line rule-action" }, kind, fields, iconBtn("x", "Remove this action", () => { r.do.splice(i, 1); draw(); }));
-  };
-  const draw = () => setChildren(box,
-    owner.triggers.map((r, i) => {
-      const watched = r.when === "becomes" || r.when === "while";
-      return h("div", { class: "trigger-row" },
-        h("div", { class: "trigger-line" }, h("b", null, "When"),
-          h("select", { "aria-label": "When", onchange: ev => {
-            r.when = ev.target.value;
-            if ((r.when === "becomes" || r.when === "while") && !r.test?.length) r.test = [{ value: "item.charges", op: "=", to: 0 }];
-            if (r.when !== "becomes" && r.when !== "while") delete r.test;
-            if (r.when === "while") r.every ??= 1; else delete r.every;
-            draw();
-          } }, RULE_WHEN.map(([k, l]) => h("option", { value: k, selected: r.when === k }, l)))),
-        watched && condRows(r.test, "Condition"),
-        watched && h("div", { class: "trigger-line" },
-          h("button", { class: "btn", type: "button", onclick: () => { r.test.push({ value: "item.charges", op: "=", to: 0 }); draw(); } }, icon("plus"), "And"),
-          r.when === "while" && [h("span", { class: "muted small" }, "every"),
-            h("input", { type: "number", min: 0.25, step: "any", class: "rule-num", value: r.every ?? 1, "aria-label": "Every how many seconds",
-              onchange: ev => { r.every = Math.max(0.25, +ev.target.value || 1); } }), h("span", { class: "muted small" }, "seconds")]),
-        r.if?.length > 0 && [h("div", { class: "trigger-line" }, h("b", null, "Only if")), condRows(r.if, "Only if")],
-        h("div", { class: "trigger-line" }, h("b", null, "Then")),
-        (r.do || []).map((a, j) => actionRow(r, a, j)),
-        h("div", { class: "trigger-line" },
-          h("button", { class: "btn", type: "button", onclick: () => { (r.do ||= []).push({ set: firstState(), to: 1 }); draw(); } }, icon("plus"), "Action"),
-          !r.if?.length && h("button", { class: "btn", type: "button", onclick: () => { r.if = [{ value: firstState(), op: "=", to: 1 }]; draw(); } }, icon("plus"), "Only if")),
-        h("label", { class: "field full" }, h("span", null, "Message to the player (optional)"),
-          h("input", { type: "text", value: r.message || "", maxlength: 200, placeholder: "e.g. The ring tightens on your finger.",
-            oninput: ev => { if (ev.target.value.trim()) r.message = ev.target.value; else delete r.message; } })),
-        h("p", { class: "muted small rule-words", "data-rule": i }, ruleWords(r)),
-        iconBtn("trash", "Remove this rule", () => { owner.triggers.splice(i, 1); draw(); }, "danger-hover"));
-    }),
-    h("button", { class: "btn", type: "button", onclick: () => {
-      owner.triggers.push({ when: "acquired", do: states[0] ? [{ set: `item.state.${states[0].key}`, to: 1 }] : [{ message: "" }] });
-      draw();
-    } }, icon("plus"), "Add a rule"),
-    h("details", { class: "muted small rule-help" }, h("summary", null, "Values, conditions and formulas"),
-      h("p", null, "A value is named by where it is: ", h("code", null, "item.charges"), ", ", h("code", null, "item.state.cursed"), " (1 on, 0 off), ",
-        h("code", null, "local.heat"), " (the item's Local value, else its character's), ", h("code", null, "char.local.luck"), ", ", h("code", null, "global.doom"),
-        ". Suggestions appear as you type."),
-      h("p", null, "Compare with a number, on or off, one of the value's choices by name, or a formula: ", h("code", null, "local.heat / 2 + 1"),
-        ", with + − × ÷ (", h("code", null, "* /"), "), ", h("code", null, "min max clamp abs round floor ceil sqrt"), "."),
-      h("p", null, "Rules can change the item's states and charges, and Local values. Global values are the GM's.")));
-  // Each rule in words, kept up to date as it's edited.
-  const reword = () => box.querySelectorAll(".rule-words").forEach(p => { const r = owner.triggers[+p.dataset.rule]; if (r) p.textContent = ruleWords(r); });
-  box.addEventListener("change", reword);
-  box.addEventListener("input", reword);
-  draw();
-  return box;
-}
-
 // Rules as saved: complete ones only.
 // Also used on rules from elsewhere (rulesOf), so it takes nothing on trust: lists, strings and
 // numbers are checked, and text is cut short.
@@ -466,6 +593,12 @@ function cleanTriggers(list) {
   const okCond = c => c && typeof c === "object" && typeof c.value === "string" && c.value.length <= 80 && clockwork.find(c.value)
     && RULE_OPS.some(o => o[0] === c.op) && (num(c.to) || (typeof c.to === "string" && c.to !== ""));
   const cond = c => ({ value: c.value, op: c.op, to: toOf(c.to), ...(c.op === "between" ? { to2: toOf(c.to2) } : {}) });
+  const scopeOf = s => {
+    if (!s || typeof s !== "object") return null;
+    const o = {};
+    for (const k of ["character", "item", "drawing", "panel"]) if (typeof s[k] === "string" && s[k] && s[k].length <= 80) o[k] = s[k];
+    return Object.keys(o).length ? o : null;
+  };
   return (Array.isArray(list) ? list : []).slice(0, 30).map(t => {
     if (!t || typeof t !== "object" || !RULE_WHEN.some(w => w[0] === t.when)) return null;
     const watched = t.when === "becomes" || t.when === "while";
@@ -474,11 +607,18 @@ function cleanTriggers(list) {
       const d = actionOf(a);
       return d.key === "message" ? { message: text(a.message) }
         : d.key === "change" ? { change: a.change, rate: a.rate, ...(num(a.until) ? { until: a.until } : {}) }
+        : d.key === "shop" ? { shop: text(a.shop, 40), open: a.open }
+        : d.key === "take" ? { take: a.take, ...(a.to === "window" ? { to: "window" } : {}) } : d.key === "putIn" ? { putIn: 1 } : d.key === "use" ? { use: a.use } : d.key === "details" ? { details: 1 }
+        : d.key === "press" ? { press: text(a.press, 40) }
         : { [d.key]: a[d.key], [d.key === "set" ? "to" : "by"]: toOf(a[d.key === "set" ? "to" : "by"]) };
     });
     if ((watched && !test.length) || (!acts.length && !t.message)) return null;
-    return { when: t.when, ...(watched ? { test } : {}), ...(guard.length ? { if: guard } : {}),
+    const button = t.when === "used" ? text(t.button, 40).trim() : "", signal = t.when === "signal" ? text(t.signal, 40).trim() : "";
+    if ((t.when === "used" && !button) || (t.when === "signal" && !signal)) return null;
+    const scope = scopeOf(t.appliesTo);
+    return { ...(typeof t.id === "string" && t.id ? { id: text(t.id, 40) } : {}), ...(typeof t.name === "string" && t.name.trim() ? { name: text(t.name.trim(), 80) } : {}),
+      when: t.when, ...(button ? { button } : {}), ...(signal ? { signal } : {}), ...(watched ? { test } : {}), ...(guard.length ? { if: guard } : {}),
       ...(t.when === "while" ? { every: Math.min(86400, Math.max(0.25, +t.every || 1)) } : {}), do: acts,
-      ...(t.message ? { message: text(t.message) } : {}) };
+      ...(t.message ? { message: text(t.message) } : {}), ...(scope ? { appliesTo: scope } : {}) };
   }).filter(Boolean);
 }
