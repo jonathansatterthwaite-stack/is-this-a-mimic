@@ -546,9 +546,6 @@ input.trade-n { width: 64px; flex: none; }
 .settle-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 4px 0 2px; }
 input.settle-n { width: 70px; flex: none; }
 .check-row { gap: 10px; cursor: pointer; }
-.treasure-banner { display: flex; align-items: center; gap: 10px; padding: 10px 14px; margin: 8px 0; border-radius: var(--radius);
-  background: color-mix(in srgb, var(--accent) 14%, var(--surface)); border: 1px solid var(--accent); }
-.treasure-banner .icon { width: 22px; height: 22px; color: var(--accent); }
 .modal-actions { justify-content: flex-end; margin-top: 4px; }
 .treasure-table-row { gap: 10px; }
 .tt-row { border: 1px solid var(--border); border-radius: 10px; padding: 8px 10px; display: grid; gap: 6px; }
@@ -1247,10 +1244,6 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .trade-sides dt { color: var(--muted); }
 .trade-sides dd { margin: 0; }
 .trade-note { font-style: italic; margin: 8px 0 0; }
-.trade-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px; }
-.trade-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; }
-.trade-col { min-width: 0; }
-.trade-col h4:first-child { margin-top: 0; }
 /* A trade side: its toolbar and chips stay put; the items scroll. */
 .picker { border: 1px solid var(--border); border-radius: 8px; background: var(--surface); padding: 6px; min-width: 0; }
 .picker .inv-list { max-height: 340px; overflow-y: auto; }
@@ -1485,12 +1478,11 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
   .row:has(> .cw-cog) .row-main { flex-basis: calc(100% - 86px); }
   .row .type-dot, .row .row-icon { align-self: flex-start; margin-top: 8px; }
   .inv-list .row-weight { margin-left: 18px; text-align: left; width: auto; flex: 1; }
-  .overlay { padding: 0; place-items: end stretch; }
+  .overlay { padding: 0; place-items: end stretch; grid-template-columns: minmax(0, 1fr); } /* (the screen's width, not the content's) */
   .modal, .modal.wide { width: 100%; max-height: 92vh; border-radius: 16px 16px 0 0; border-bottom: 0; }
   .form.grid, .grid, .entry-controls { grid-template-columns: 1fr; }
   .coin-grid { grid-template-columns: repeat(3, 1fr); }
   .contents { columns: 1; }
-  .trade-grid { grid-template-columns: 1fr; }
   .member .member-items { columns: 1; }
   .coin-grid.small { grid-template-columns: repeat(5, 1fr); }
   .modal-foot .btn { flex: 1; }
@@ -1755,3 +1747,75 @@ button.fm-node:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--fmk) 35%, 
 .cp-cell.has-bg { background: transparent; }
 .cp-cell.has-bg .cp-btn, .cp-grid.has-bg .cp-btn { background: color-mix(in srgb, var(--surface) 45%, transparent); }
 .cp-bg-field { display: flex; flex-direction: column; gap: 8px; }
+
+/* Shared screens (js/shared.js): the top bar's Shared button, its tray, a phone's chips above the tabs. */
+.shared-btn { display: inline-flex; align-items: center; gap: 6px; flex: none; border: 1px solid var(--accent); color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface)); border-radius: 99px; padding: 4px 10px; font: inherit; font-size: .85rem; font-weight: 700; cursor: pointer; }
+.shared-btn[hidden] { display: none; }
+.shared-btn .icon { width: 16px; height: 16px; }
+.shared-n { background: var(--accent); color: #fff; border-radius: 99px; padding: 0 6px; font-size: .75rem; line-height: 1.5; }
+.shared-btn.fresh { box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); animation: shared-pulse 1.6s ease-in-out 3; }
+@keyframes shared-pulse { 50% { box-shadow: 0 0 0 6px color-mix(in srgb, var(--accent) 12%, transparent); } }
+@media (prefers-reduced-motion: reduce) { .shared-btn.fresh { animation: none; } }
+.topbar.tight .shared-btn .mode-word { display: none; }
+.shared-kind { width: 26px; height: 26px; border-radius: 7px; display: inline-flex; align-items: center; justify-content: center; color: #fff; flex: none; background: var(--muted); }
+.shared-kind .icon { width: 15px; height: 15px; }
+.shared-kind.k-item { background: var(--rule-do); } .shared-kind.k-treasure { background: #b08a2e; } .shared-kind.k-trade { background: var(--rule-if); } .shared-kind.k-panel { background: var(--rule-when); }
+.shared-tray h4 { margin: 10px 0 6px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+.shared-row .row-main { display: flex; align-items: center; gap: 10px; }
+.shared-row .row-main > .grow { display: flex; flex-direction: column; min-width: 0; }
+.shared-row.on { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.shared-chips { display: none; }
+@media (max-width: 720px) {
+  .shared-chips:not([hidden]) { display: flex; position: fixed; left: 0; right: 0; bottom: calc(64px + env(safe-area-inset-bottom)); z-index: 19;
+    gap: 6px; padding: 6px 12px; overflow-x: auto; background: var(--surface-2); border-top: 1px solid var(--border); }
+  body.has-shared-chips { padding-bottom: calc(110px + env(safe-area-inset-bottom)); }
+}
+.shared-chip { display: inline-flex; align-items: center; gap: 6px; flex: none; border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 99px; padding: 3px 10px 3px 3px; font: inherit; font-size: .8rem; white-space: nowrap; cursor: pointer; }
+.shared-chip .shared-kind { width: 22px; height: 22px; }
+.shared-chip.fresh { border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+/* A live trade (js/party-ui.js: openTradeShare): two sides, what each gives; asks dashed. */
+.trade-live { container-type: inline-size; }
+.trade-live-sides { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@container (max-width: 560px) { .trade-live-sides { grid-template-columns: 1fr; } } /* (side by side only where there's room: not docked) */
+.trade-side { display: flex; flex-direction: column; gap: 6px; min-width: 0; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); padding: 8px; }
+.trade-side h4 { margin: 0 0 2px; }
+.trade-row { display: flex; align-items: center; gap: 8px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); }
+.trade-row .row-icon { flex: none; width: 26px; height: 26px; }
+.trade-main { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; align-items: flex-start; background: none; border: 0; padding: 0; color: inherit; font: inherit; text-align: left; }
+.trade-main .row-title { overflow-wrap: break-word; }
+.trade-row > :not(.trade-main) { flex: none; }
+.trade-row.ask { border-style: dashed; background: transparent; }
+.trade-drop { border: 2px dashed var(--border); border-radius: 10px; padding: 10px; text-align: center; color: var(--muted); font-size: .85rem; }
+.trade-drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); color: var(--accent); }
+.trade-agree { margin-top: auto; padding: 6px 8px; border-radius: 8px; font-size: .85rem; background: var(--surface-2); color: var(--muted); }
+.trade-agree.yes { background: color-mix(in srgb, var(--rule-do) 18%, var(--surface)); color: var(--rule-do); font-weight: 600; }
+.trade-coins { margin: 0; font-weight: 600; }
+.trade-note-shown { margin: 0; font-style: italic; color: var(--muted); }
+.trade-ask { align-self: flex-start; }
+.trade-foot { justify-content: flex-end; width: 100%; }
+
+/* A panel shown to players (js/control-panels.js): on the GM's card, to whom and what they did. */
+.cp-shown { margin: 0 12px 8px; padding: 8px 10px; border: 1px solid color-mix(in srgb, var(--rule-do) 40%, var(--border)); border-radius: 10px;
+  background: color-mix(in srgb, var(--rule-do) 10%, var(--surface)); font-size: .9rem; }
+.cp-shown .inline { align-items: center; gap: 8px; }
+.cp-uses { margin: 6px 0 0; padding-left: 18px; }
+.shared-panel { display: flex; flex-direction: column; gap: 8px; }
+
+/* A socket (js/control-panels.js): an item dropped in; empty, a dashed place to drop one. */
+.cp-socket { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; flex: 1; min-height: 0; padding: 6px;
+  border: 2px dashed var(--border); border-radius: 10px; text-align: center; }
+.cp-socket.full { border-style: solid; border-color: color-mix(in srgb, #c9a64a 70%, var(--border)); background: color-mix(in srgb, #c9a64a 14%, transparent); }
+.cp-socket.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.cp-socket-item { display: inline-flex; align-items: center; gap: 6px; }
+.cp-socket .btn { padding: 3px 10px; min-height: 0; }
+
+/* At hand (js/shared.js): a strip of bookmarked items along the bottom of a trade's or a shown panel's screen. */
+.at-hand.tiles { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 6px; overflow-x: auto; min-width: 0; max-width: 100%;
+  padding: 10px 0 4px; border-top: 1px solid var(--border); --tile-size: 76px; }
+.at-hand .tile { flex: none; width: var(--tile-size); cursor: grab; }
+.shared-panel, .trade-live { min-width: 0; max-width: 100%; } /* (the strip scrolls; it doesn't widen the screen) */
+.tag.at-hand-tag { display: inline-flex; align-items: center; gap: 3px; }
+.tag.at-hand-tag .icon { width: 11px; height: 11px; }

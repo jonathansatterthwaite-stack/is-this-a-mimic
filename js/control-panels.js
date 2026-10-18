@@ -34,6 +34,8 @@
 //                                          these read (see Following values below). A panel can have
 //                                          a showIf too. A label or Text can show values: "{door}".
 //          action "rules"                  button: sets nothing, just runs its rules
+//          held?: [entry]                  socket: what it starts holding (an item and what's in it),
+//                                          when the panel is shown to players (see Sockets)
 //          bg?                             a background (a panel can have one too): { image } (a
 //                                          stored picture) or a drawing (iconDoc, iconSvg, iconLib:
 //                                          live with the values it reads), fit "cover" (fill, the
@@ -43,10 +45,10 @@
 //                                          a tab's picture: icon, or a drawing (iconDoc, iconSvg, iconLib) }
 
 const CONTROL_TYPES = [["slider", "Slider"], ["range", "Range slider"], ["toggle", "Switch"], ["button", "Button"], ["dropdown", "Dropdown"],
-  ["polygon", "Polygon"], ["board", "Board"], ["tabs", "Tabs"], ["icon", "Picture"], ["text", "Text"]];
+  ["polygon", "Polygon"], ["board", "Board"], ["socket", "Socket"], ["tabs", "Tabs"], ["icon", "Picture"], ["text", "Text"]];
 // The kinds offered when making one, in groups: a range slider is a slider with two handles (Handles).
 const CONTROL_KINDS = CONTROL_TYPES.filter(([k]) => k !== "range");
-const CONTROL_GROUPS = [["Layout", ["tabs"]], ["Display", ["text", "icon"]], ["Interactive", ["slider", "toggle", "button", "dropdown", "polygon", "board"]]];
+const CONTROL_GROUPS = [["Layout", ["tabs"]], ["Display", ["text", "icon"]], ["Interactive", ["slider", "toggle", "button", "dropdown", "polygon", "board", "socket"]]];
 const SETS_VALUE = new Set(["slider", "toggle", "button", "dropdown"]); // one value, `name`
 const isUpright = ctl => ctl.h > ctl.w;
 
@@ -68,8 +70,23 @@ function fillWords(ctl, text, specs) {
     return showValue(g ? specs.get("global:" + g[1]) : null, v);
   });
 }
+// Who a panel's controls act as. The GM's own panels: the GM (values set through Clockwork, the
+// control's rules run here). A panel shown to a player (panel.sharedId: js/shared.js): each change
+// and use goes through the host to the GM's device that showed it, which makes it (as the GM) and
+// runs the control's rules; the player's screen moves at once (a preview, kept until it's made).
+const isSharedPanel = panel => !!panel?.sharedId;
+// A control used (its rules: "A control is used").
+function panelUsed(panel, ctlId, value, signal = "") {
+  if (isSharedPanel(panel)) return sharedPanelUse(panel, { type: "used", control: ctlId, ...(typeof value === "number" ? { value } : {}), ...(signal ? { signal } : {}) });
+  controlUsed(panel.id, ctlId, value, signal);
+}
+// One of a control's values set: name (as the control names it), in scope/target (where it's kept).
+function panelSet(panel, ctl, name, value, scope = ctl.scope, target = ctl.target) {
+  if (isSharedPanel(panel)) return sharedPanelSet(panel, ctl.id, name, value, scope, target);
+  return clockwork.change(...clockwork.at(scope, target, name), value, "gm").done;
+}
 // Once a control's change is sent: its rules ("A control is used").
-const usedAfter = (sending, panel, ctl, value) => Promise.resolve(sending).then(() => controlUsed(panel.id, ctl.id, value), () => {});
+const usedAfter = (sending, panel, ctl, value) => Promise.resolve(sending).then(() => panelUsed(panel, ctl.id, value), () => {});
 // A control's picture: its drawing (live with the Global values it reads, and the Local values of
 // `whose`: [charId, entryUid]), else its built-in icon.
 function controlPicture(ctl, cls, fallback = null, whose = ["", ""]) {
@@ -108,7 +125,7 @@ const panelImages = panel => [panel.bg?.image, ...(panel.controls || []).flatMap
 // ------------------------------------------------------------------ backgrounds
 // A panel's or a control's background: a picture, or a drawing (live with the values it reads),
 // filling it, fitted in or stretched, with a veil over it (fade) to keep controls readable.
-const BG_KINDS = new Set(["slider", "range", "toggle", "button", "dropdown", "polygon", "text"]); // (a board and a Picture have pictures of their own)
+const BG_KINDS = new Set(["slider", "range", "toggle", "button", "dropdown", "polygon", "text", "socket"]); // (a board and a Picture have pictures of their own)
 const hasBg = bg => !!bg && (!!bg.image || !!(bg.iconSvg && bg.iconDoc));
 function bgLayer(bg) {
   if (!hasBg(bg)) return null;
@@ -161,10 +178,10 @@ function controlValue(ctl, specs) {
   const v = ctl.name ? valueAt(ctl.scope, ctl.target, valueKey(ctl.name)) : undefined;
   return v ?? specOfControl(ctl, specs)?.value ?? 0;
 }
-const sendControl = (ctl, value) => sendNamed(ctl, ctl.name, value);
+const sendControl = (ctl, value, panel) => sendNamed(ctl, ctl.name, value, panel);
 // Through Clockwork (js/clockwork.js), as the GM: set (resolves when the party has it), or shown on
 // this device's live icons at once while it's dragged (preview), until it's let go (settle).
-const sendNamed = (ctl, name, value) => clockwork.change(...clockwork.at(ctl.scope, ctl.target, name), value, "gm").done;
+const sendNamed = (ctl, name, value, panel) => panelSet(panel, ctl, name, value);
 const previewNamed = (ctl, name, value) => clockwork.preview(...clockwork.at(ctl.scope, ctl.target, name), value);
 const settle = sending => Promise.resolve(sending).finally(() => clockwork.endPreview());
 // Another of a control's values (a range slider's upper, a polygon's corners): as set, else its default.
@@ -235,7 +252,7 @@ function rangeControl(ctl, specs, label, panel) {
     out.textContent = `${fmtNum(lo)} – ${fmtNum(hi)}`;
   };
   place();
-  const sender = throttled(() => Promise.all([sendNamed(ctl, ctl.name, lo), sendNamed(ctl, ctl.name2, hi)]));
+  const sender = throttled(() => Promise.all([sendNamed(ctl, ctl.name, lo, panel), sendNamed(ctl, ctl.name2, hi, panel)]));
   const valueAtPointer = ev => {
     const r = track.getBoundingClientRect();
     if (!r.width || !r.height) return up ? hi : lo; // not on screen
@@ -358,7 +375,7 @@ function polygonControl(ctl, specs, label, panel) {
     labels.forEach((el, i) => setChildren(el, verts[i].label || verts[i].name, " ", h("b", null, fmtNum(vals[i]))));
   };
   place();
-  const sender = throttled(() => { const vals = values(); return Promise.all(verts.map((v, i) => sendNamed(ctl, v.name, vals[i]))); });
+  const sender = throttled(() => { const vals = values(); return Promise.all(verts.map((v, i) => sendNamed(ctl, v.name, vals[i], panel))); });
   // Where the handle is, kept with the control (on this device).
   const keep = () => updatePanel(panel.id, p => { const c = p.controls.find(c => c.id === ctl.id); if (c) c.at = { x: Math.round(at[0] * 1e4) / 1e4, y: Math.round(at[1] * 1e4) / 1e4 }; });
   dragOn(sq, null, ev => {
@@ -402,7 +419,7 @@ function controlLive(ctl, specs, panel) {
       // Shown here at once while it moves, sent at most every 150 ms (players' icons follow), and
       // once when let go.
       let timer = null, last = 0, latest = v;
-      const send = () => { clearTimeout(timer); timer = null; last = Date.now(); return sendControl(ctl, latest); };
+      const send = () => { clearTimeout(timer); timer = null; last = Date.now(); return sendControl(ctl, latest, panel); };
       // Party updates mustn't redraw it mid-drag: held from pressing to letting go (a press that
       // doesn't move it fires no change).
       const release = () => { window.removeEventListener("pointerup", release); window.removeEventListener("pointercancel", release); setTimeout(() => holdRender(false)); };
@@ -427,32 +444,37 @@ function controlLive(ctl, specs, panel) {
       const on = ctl.on ?? 1, off = ctl.off ?? 0, isOn = v === on;
       return h("button", { type: "button", class: "cp-switch" + (isOn ? " on" : "") + (isUpright(ctl) ? " upright" : "") + (ctl.reverse ? " reverse" : ""),
         role: "switch", "aria-checked": String(isOn),
-        onclick: () => usedAfter(sendControl(ctl, isOn ? off : on), panel, ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), h("span", null, label));
+        onclick: () => usedAfter(sendControl(ctl, isOn ? off : on, panel), panel, ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), h("span", null, label));
     }
     case "button": {
       // (Just its rules: it sets nothing)
       const next = ctl.action === "rules" || !ctl.name ? undefined : ctl.action === "add" ? Math.round((v + (ctl.amount ?? 1)) * 1000) / 1000 : ctl.amount ?? 1;
       return h("button", { type: "button", class: "btn cp-btn",
         title: next === undefined ? "Runs its rules" : `${ctl.action === "add" ? `Adds ${ctl.amount ?? 1} to` : `Sets`} ${ctl.name}${ctl.action === "add" ? "" : ` to ${ctl.amount ?? 1}`}`,
-        onclick: () => usedAfter(next === undefined ? null : sendControl(ctl, next), panel, ctl, next) },
+        onclick: () => usedAfter(next === undefined ? null : sendControl(ctl, next, panel), panel, ctl, next) },
         controlPicture(ctl, "cp-btn-icon"), label);
     }
     case "dropdown":
       if (isPlayersDropdown(ctl)) {
         const chars = gmChars(), at = chosenPlayer(panel, ctl);
         return [caption || h("span", { class: "cp-label" }, "Player"), h("select", { class: "cp-select", "aria-label": label || "Player",
-          onchange: ev => { ui.panelPick[`${panel.id}/${ctl.id}`] = ev.target.value; render(); controlUsed(panel.id, ctl.id); } },
+          onchange: ev => { ui.panelPick[`${panel.id}/${ctl.id}`] = ev.target.value; render(); panelUsed(panel, ctl.id); } },
           chars.length ? chars.map(c => h("option", { value: c.id, selected: c.id === at }, c.name)) : h("option", { value: "" }, "No players yet"))];
       }
-      return [caption, h("select", { class: "cp-select", "aria-label": label || "Value", onchange: ev => usedAfter(sendControl(ctl, +ev.target.value), panel, ctl, +ev.target.value) },
+      return [caption, h("select", { class: "cp-select", "aria-label": label || "Value", onchange: ev => usedAfter(sendControl(ctl, +ev.target.value, panel), panel, ctl, +ev.target.value) },
         dropdownOptions(ctl, spec).map(o => h("option", { value: o.value, selected: o.value === v }, o.label)))];
+    case "socket":
+      return socketLive(panel, ctl, label);
     case "icon":
-      return [ctl.iconDoc && ctl.iconSvg && drawingIsInteractive(ctl.iconDoc) && isGmDevice() ? touchablePicture(panel, ctl)
+      return [ctl.iconDoc && ctl.iconSvg && drawingIsInteractive(ctl.iconDoc) && (isGmDevice() || isSharedPanel(panel)) ? touchablePicture(panel, ctl)
         : controlPicture(ctl, "cp-icon", "question", pictureWhose(panel, ctl)), caption];
     case "board": {
       // Its layers' state on this device, and its groups' members splitting off (kept with it).
       const opts = { key: `${panel.id}/${ctl.id}`, change: fn => updatePanel(panel.id, p => { const c = findItem(p, ctl.id); if (c?.board) fn(c.board); }),
-        used: () => controlUsed(panel.id, ctl.id) }; // (a pin dropped)
+        used: () => panelUsed(panel, ctl.id), // (a pin dropped)
+        // (a pin's values, set as the panel acts: see panelSet)
+        sendPos: (setters, x, y) => Promise.all(setters.flatMap(s => [[s.xVar, axisValue(x, s.xRange)], [s.yVar, axisValue(y, s.yRange)]].filter(([n]) => n)
+          .map(([n, v]) => panelSet(panel, ctl, n, v, s.scope, s.target)))) };
       return [caption, gmBoard(ctl.board || { pins: [] }, opts),
         iconBtn("expand", "Expand: zoom, scroll and layers", () => openBoardZoom(ctl.board || { pins: [] }, ctl.label || "Board", opts), "cp-expand")];
     }
@@ -480,7 +502,7 @@ function touchablePicture(panel, ctl) {
       const at = g ? clockwork.at("party", "", g[1]) : l && where ? clockwork.at(...where, l[1]) : null;
       if (!at) { touch[name] = v; continue; }
       if (!done) clockwork.preview(...at, v);
-      if (setNow) clockwork.change(...at, v, "gm");
+      if (setNow) isSharedPanel(panel) ? sharedPanelSet(panel, ctl.id, name, v, ...(g ? ["party", ""] : where)) : clockwork.change(...at, v, "gm");
     }
     if (setNow) sent = done ? 0 : Date.now();
     if (done) clockwork.endPreview();
@@ -506,10 +528,48 @@ function touchablePicture(panel, ctl) {
       onSound: (sound, volume) => { const f = soundVolume(); if (f > 0) T.playSound(n, sound, volume * f); },
       onVibrate: ms => { try { navigator.vibrate?.(ms); } catch {} },
       // (the key is the hotspot's name as svg-lay-tool keeps it: actionKey)
-      onApp: (app, key) => { if (app === "signal") controlUsed(panel.id, ctl.id, undefined, hotspotNames(ctl.iconDoc).find(x => actionKey(x) === key) || key); },
+      onApp: (app, key) => { if (app === "signal") panelUsed(panel, ctl.id, undefined, hotspotNames(ctl.iconDoc).find(x => actionKey(x) === key) || key); },
       slop: () => 8 / scale(), tolerance: () => 14 / scale() });
   }).catch(() => {});
   return node;
+}
+
+// ------------------------------------------------------------------ Sockets
+// A socket takes one item. In a panel shown to players (js/shared.js), a player drops one in from
+// the inventory (or picks it: Put something in…) and it leaves the inventory, held by the host in
+// the share (server.py: socket_call); Take it puts it back in theirs. Either is "A control is used"
+// on the GM's device (its rules read control.has, control.item.…). A socket can start holding an
+// item (held: the GM's, each time the panel is shown); ended, what players put in goes back to them.
+
+// What a socket holds now: in a shown panel, the share's; the GM's own panel, shown: the same;
+// not shown: what it starts with. { items, by, byName } or null.
+function socketHeld(panel, ctl) {
+  const share = isSharedPanel(panel) ? (party.shares || []).find(s => s.id === panel.sharedId) : shownPanel(panel);
+  if (share) return share.sockets?.[ctl.id] || null;
+  return ctl.held?.length ? { items: ctl.held, by: "", byName: `The ${term("gm")}` } : null;
+}
+function socketLive(panel, ctl, label) {
+  const held = socketHeld(panel, ctl), top = held?.items?.find(e => !e.parent);
+  const player = isSharedPanel(panel), shared = player ? panel.sharedId : shownPanel(panel)?.id;
+  const me = player && store.state.characters.find(c => c.id === panel.sharedChar);
+  const call = async body => { try { if (me) await party.put(me.id); await party.api("POST", `api/share/${shared}/socket`, { control: ctl.id, ...body }); } catch (e) { toast(e.message); } };
+  const put = uid => call({ character: me.id, uid });
+  const box = h("div", { class: "cp-socket" + (top ? " full" : "") },
+    label && h("span", { class: "cp-label" }, label),
+    top ? [h("span", { class: "cp-socket-item" }, itemIcon(top.item, "row-icon"), h("b", null, entryName(top), top.qty > 1 && ` ×${top.qty.toLocaleString()}`)),
+        held.by && h("small", { class: "muted" }, player && held.by === me?.id ? "you put it in" : `put in by ${held.byName}`),
+        player && me && h("button", { type: "button", class: "btn", onclick: () => call({ character: me.id, take: true }) }, "Take it"),
+        !player && shared && held.by && h("button", { type: "button", class: "btn", onclick: () => call({ take: true }) }, "Give it back")]
+      : [h("span", { class: "muted small" }, player ? "Drop an item here" : shared ? "Empty" : "Empty (players put things in once it's shown to them)"),
+        player && me && h("button", { type: "button", class: "btn", onclick: () => pickEntries(`Put something in ${label || "it"}`, me, [], map => { const uid = [...map.keys()][0]; if (uid) put(uid); }) },
+          icon("plus"), "Put something in…")]);
+  if (player && me && !top) {
+    box.addEventListener("dragover", ev => { if (ev.dataTransfer.types.includes("text/entry")) { ev.preventDefault(); box.classList.add("over"); } });
+    box.addEventListener("dragleave", () => box.classList.remove("over"));
+    box.addEventListener("drop", ev => { ev.preventDefault(); box.classList.remove("over"); const [from, uid] = ev.dataTransfer.getData("text/entry").split("|");
+      if (from === "inv" && me.items.some(e => e.uid === uid)) put(uid); });
+  }
+  return box;
 }
 
 // ------------------------------------------------------------------ Tabs controls
@@ -650,7 +710,7 @@ function controlCell(panel, ctl, specs, editing, grid) {
   const live = () => tabs ? tabsLive(panel, ctl) : controlLive(ctl, specs, panel);
   // Hidden (showIf) or locked (lockIf): gone in Play mode; faded and marked in Edit mode, to arrange.
   const hidden = !controlShown(ctl), locked = controlLocked(ctl);
-  if (hidden && !editing && playMode()) return null;
+  if (hidden && !editing && (playMode() || isSharedPanel(panel))) return null;
   el.classList.toggle("cp-hidden", hidden);
   el.classList.toggle("cp-locked", locked);
   const flag = (hidden || locked) && h("span", { class: "cp-flag", title: hidden ? "Hidden now: its Shown when doesn't hold (only Edit mode shows it)" : "Locked now: its Locked when holds" },
@@ -732,6 +792,7 @@ function controlPanelCard(panel) {
       h("span", { class: "muted small" }, plural(panel.controls.length, "control")),
       !closed && (editing || canEditNow()) && h("button", { class: "btn" + (editing ? " primary" : ""), onclick: () => { ui.panelEdit = editing ? null : panel.id; render(); } },
         icon(editing ? "check" : "grid"), editing ? "Done" : "Arrange"),
+      party.active && isGmDevice() && !shownPanel(panel) && h("button", { class: "btn", onclick: () => openShowPanel(panel) }, icon("eye"), "Show to players…"),
       canEditNow() && iconBtn("edit", `Edit ${panel.name}`, () => editControlPanel(panel)),
       iconBtn("trash", `Delete ${panel.name}`, () => {
         const rules = rulesForGone(r => r.appliesTo?.panel === panel.id);
@@ -740,6 +801,7 @@ function controlPanelCard(panel) {
           if (rules) saveRuleBook(list => list.filter(r => r.appliesTo?.panel !== panel.id), null);
         });
       }, "danger-hover")),
+    shownPanelBar(panel),
     !closed && [
       editing && h("div", { class: "cp-arrange-bar" },
         h("p", { class: "muted small" }, "Click + to add a control (Tabs splits the panel into tabs). Drag a control to move it, or its corner to resize it; or select it and use the arrow keys (Shift to resize). The pencil edits it.",
@@ -750,8 +812,68 @@ function controlPanelCard(panel) {
 
 // ------------------------------------------------------------------ making and editing
 
+// ------------------------------------------------------------------ showing a panel to players
+// A shared screen (js/shared.js: kind "panel"): the GM chooses who; the panel goes as it is (its
+// pictures to the host), and again when it's changed; players' uses come back to this device
+// (takePanelUses).
+
+// The share showing this panel (from this device), if it's shown.
+const shownPanel = panel => (party.active ? party.shares || [] : []).find(s => s.kind === "panel" && s.fromMine && s.panelId === panel.id) || null;
+// A panel as it goes to players: as it is (its controls, drawings and pictures' ids).
+const panelForPlayers = panel => clone({ id: panel.id, kind: "panel", name: panel.name, cols: panel.cols, rows: panel.rows, controls: panel.controls,
+  ...(panel.showIf ? { showIf: panel.showIf } : {}), ...(panel.bg ? { bg: panel.bg } : {}) });
+// Its pictures, so the players' devices can fetch them from the host.
+async function uploadPanelImages(panel) {
+  for (const id of panelImages(panel)) { const data = await imageStore.get(id); if (data) await party.uploadImage(id, data).catch(() => {}); }
+}
+function openShowPanel(panel) {
+  const chosen = new Set(party.chars.filter(c => c.online && !c.mine).map(c => c.id));
+  let close;
+  const go = async () => {
+    if (!chosen.size) return toast("Choose who to show it to");
+    close();
+    try {
+      await uploadPanelImages(panel);
+      await party.api("POST", "api/share", { kind: "panel", panelId: panel.id, title: panel.name, panel: panelForPlayers(panel), to: [...chosen] });
+      toast(`Showing ${panel.name}: what they do with it comes here`);
+    } catch (e) { toast(e.message); }
+  };
+  close = openModal(`Show ${panel.name}`, h("div", { class: "form" },
+    h("p", { class: "muted small" }, "It opens for them to use: what they press, flip or drop comes to this device, which sets the values and runs the controls' rules, as if you'd done it. Hidden controls stay hidden; locked ones can't be used. It stays until you end it."),
+    h("div", { class: "group" }, party.chars.map(c => h("label", { class: "row check-row" },
+      h("input", { type: "checkbox", checked: chosen.has(c.id), onchange: e => { e.target.checked ? chosen.add(c.id) : chosen.delete(c.id); } }),
+      onlineDot(c.online), h("span", { class: "grow" }, c.name), c.mine && h("span", { class: "tag" }, "yours"))))),
+  { footer: [h("button", { class: "btn", onclick: () => close() }, "Cancel"), h("button", { class: "btn primary", onclick: go }, icon("eye"), "Show it")] });
+}
+// On the GM's card while it's shown: to whom, End, and what players did last.
+function shownPanelBar(panel) {
+  const s = shownPanel(panel);
+  if (!s) return null;
+  const log = (panelUseLog.get(panel.id) || []).slice(-3).reverse();
+  return h("div", { class: "cp-shown" },
+    h("div", { class: "inline" }, icon("eye"), h("span", { class: "grow" }, "Shown to ", h("b", null, s.to.map(id => party.chars.find(c => c.id === id)?.name || "someone").join(", "))),
+      h("button", { class: "btn", onclick: () => endShare(s) }, "End")),
+    log.length > 0 && h("ul", { class: "cp-uses muted small" }, log.map(x => h("li", null, x))));
+}
+
 // How many of the rule book's rules a removed panel or control takes with it.
 const rulesForGone = fn => (store.campaign()?.rules || []).filter(r => r && fn(r)).length;
+
+// A socket's Starts holding: an item from the catalog (it's there each time the panel is shown).
+function socketStartField(draft) {
+  const box = h("div", { class: "inline wrap" });
+  const draw = () => {
+    const top = draft.held?.find(e => !e.parent);
+    setChildren(box, top ? [itemIcon(top.item, "row-icon"), h("b", null, entryName(top))] : h("span", { class: "muted" }, "Nothing"),
+      h("button", { type: "button", class: "btn", onclick: () => openStockPicker({ title: "What it starts holding",
+        has: id => draft.held?.some(e => !e.parent && e.srcId === id),
+        add: (id, snapshot) => { const tmp = { items: [] }; addToInventory(tmp, { ...snapshot, id }, 1); draft.held = tmp.items; draw(); } }) }, icon("plus"), top ? "Change…" : "Choose…"),
+      top && h("button", { type: "button", class: "btn", onclick: () => { delete draft.held; draw(); } }, "Nothing"));
+  };
+  draw();
+  return h("div", { class: "field" }, h("span", null, "Starts holding"), box,
+    h("small", { class: "muted" }, "It's there each time the panel is shown to players (the golden idol on its altar). Players drop things in and take them out; its rules see what (A control is used: the item is…, the item weighs…)."));
+}
 
 // A condition field (Shown when, Locked when): none, or one condition as a rule's pills.
 function condField(draft, key, label, none, add, help) {
@@ -1045,6 +1167,7 @@ function editPanelControl(panel, ctl, at) {
         h("option", { value: "rules", selected: draft.action === "rules" }, "Nothing: just its rules"))),
       !rulesOnly() && num("amount", "Amount", "1")],
     draft.type === "dropdown" && !players() && choicesEditor(rows),
+    draft.type === "socket" && socketStartField(draft),
     draft.type === "board" && h("div", { class: "field" }, h("span", null, "Picture and pins"),
       h("div", { class: "inline wrap" },
         h("span", { class: "muted small" }, `${draft.board?.image ? "A picture" : "A blank square"}, ${plural(draft.board?.pins?.length || 0, "pin")}`),
@@ -1090,6 +1213,7 @@ function editPanelControl(panel, ctl, at) {
     }
     if (!SETS_VALUE.has(draft.type) && draft.type !== "text" && draft.type !== "range") delete draft.name;
     if (draft.type !== "button") delete draft.action;
+    if (draft.type !== "socket" || !draft.held?.length) delete draft.held;
     draft.bg = BG_KINDS.has(draft.type) ? cleanBg(draft.bg) : undefined;
     if (!draft.bg) delete draft.bg;
     if (draft.type !== "range") delete draft.name2;

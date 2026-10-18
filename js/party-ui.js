@@ -203,25 +203,19 @@ function describeSide(side) {
   return parts.length ? parts.join(", ") : "nothing";
 }
 
+// A finished trade (the history: made, or walked away from).
 function tradeCard(t) {
   const iGive = t.fromMine ? t.give : t.ask;
   const iGet = t.fromMine ? t.ask : t.give;
   const who = `${t.fromName} → ${t.toName}`;
-  const status = {
-    accepted: "Completed", declined: "Declined", cancelled: "Cancelled", failed: "Failed",
-  }[t.status];
+  const status = { accepted: "Completed", cancelled: "Cancelled" }[t.status];
   return h("div", { class: "trade-card " + t.status },
     h("div", { class: "trade-head" }, icon("move"), h("b", null, who), status && h("span", { class: "tag" }, status)),
     h("dl", { class: "trade-sides" },
-      h("dt", null, t.fromMine || t.status !== "pending" ? "You give" : "You'd give"), h("dd", null, describeSide(iGive)),
-      h("dt", null, t.fromMine || t.status !== "pending" ? "You get" : "You'd get"), h("dd", null, describeSide(iGet))),
+      h("dt", null, "You give"), h("dd", null, describeSide(iGive)),
+      h("dt", null, "You get"), h("dd", null, describeSide(iGet))),
     t.note && h("p", { class: "trade-note" }, "“", t.note, "”"),
-    t.reason && h("p", { class: "muted small" }, t.reason),
-    t.status === "pending" && h("div", { class: "trade-actions" },
-      t.toMine ? [
-        h("button", { class: "btn", onclick: () => party.act(t.id, "decline") }, "Decline"),
-        h("button", { class: "btn primary", onclick: () => party.act(t.id, "accept") }, icon("check"), "Accept"),
-      ] : h("button", { class: "btn", onclick: () => party.act(t.id, "cancel") }, "Cancel offer")));
+    t.reason && h("p", { class: "muted small" }, t.reason));
 }
 
 function memberCard(c) {
@@ -295,9 +289,7 @@ function devicesCard() {
 }
 
 function renderParty() {
-  const incoming = party.incoming();
-  const outgoing = party.trades.filter(t => t.status === "pending" && t.fromMine);
-  const history = party.trades.filter(t => t.status !== "pending").slice(0, 10);
+  const history = party.trades.slice(0, 10);
   const others = party.others();
   return h("div", { class: "view-party" },
     h("section", { class: "party-banner" },
@@ -315,8 +307,6 @@ function renderParty() {
     campaignCard(),
     party.isHost() && devicesCard(),
     undecidedBanner(),
-    incoming.length > 0 && h("section", null, h("h2", null, "Offers for you"), incoming.map(tradeCard)),
-    outgoing.length > 0 && h("section", null, h("h2", null, "Your offers"), outgoing.map(tradeCard)),
     h("section", null,
       h("h2", null, "Party members"),
       others.length ? others.map(memberCard)
@@ -650,113 +640,169 @@ function notInPartyBanner() {
     h("button", { class: "btn primary", onclick: () => party.bring(c.id) }, "Bring into party"));
 }
 
-function openTradeBuilder(targetId = null, preselectUid = null) {
-  const me = store.char();
-  const others = party.others();
+function openTradeBuilder(targetId = null, preselectUid = null) { return startTrade(targetId, preselectUid); }
+
+// ------------------------------------------------------------------ trades
+// A trade is a shared screen (js/shared.js): a live trade window between one of this device's
+// characters and another (server.py: start_trade, trade_share). Each puts in what they give, and can
+// ask for something of the other's; each sees the other's side change; any change clears both
+// agreements; once both agree, the host makes the exchange in one go (or says why it can't). Walk
+// away ends it for both. Done or walked away from, it's in the Party tab's Recent trades.
+
+// Start a trade with someone (chosen here if not given), or go back to the one open with them; an
+// item chosen to trade goes in at once.
+async function startTrade(targetId = null, preselectUid = null) {
+  const me = store.char(), others = party.others();
   if (!me || !requireLinked(me)) return;
   if (!others.length) return toast("Nobody else is in the party yet");
-  let target = others.find(c => c.id === targetId) || others[0];
-  const give = new Map(), ask = new Map();
-  const giveCoins = {}, askCoins = {};
-  let note = "", close;
-  if (preselectUid) give.set(preselectUid, 1);
-
-  const giveBox = h("div", { class: "picker" });
-  const askBox = h("div", { class: "picker" });
-  const askCoinBox = h("div");
-
-  // Items inside a selected container travel with it, so they can't be picked separately.
-  const insideSelected = (char, e, map) => {
-    let p = e.parent;
-    while (p) {
-      if (map.has(p)) return true;
-      p = char.items.find(x => x.uid === p)?.parent;
-    }
-    return false;
-  };
-  // Each side lists its character's items with the inventory management template (itemManager in
-  // js/app.js), a pick on each; picked items stay listed whatever the search.
-  const picker = (side, getChar, map) => {
-    resetList("trade-" + side); // a fresh search for each trade
-    let mgr;
-    mgr = itemManager({ key: "trade-" + side, prefsKey: "trade", sorts: INVENTORY_SORTS, sort: "name", placeholder: "Search items…",
-      storage: () => {
-        const char = getChar();
-        const st = {
-          char, id: "trade:" + char.id, rootLabel: "On person", keep: e => map.has(e.uid),
-          open: e => openStoredItem(st, e),
-          rowClass: e => map.has(e.uid) ? "picked" : insideSelected(char, e, map) ? "included" : "",
-          sub: e => insideSelected(char, e, map) ? "goes with its container" : null,
-          extras: e => {
-            const included = insideSelected(char, e, map), checked = map.has(e.uid);
-            return [
-              checked && e.qty > 1 && h("input", { type: "number", class: "trade-n", min: 1, max: e.qty, value: map.get(e.uid), inputmode: "numeric",
-                "aria-label": `How many ${entryName(e)}`,
-                onchange: ev => map.set(e.uid, Math.max(1, Math.min(e.qty, Math.floor(+ev.target.value || 1)))) }),
-              h("label", { class: "check trade-pick" }, h("input", { type: "checkbox", checked: checked || included, disabled: included, "aria-label": `Trade ${entryName(e)}`,
-                onchange: ev => { ev.target.checked ? map.set(e.uid, e.qty > 1 ? 1 : e.qty) : map.delete(e.uid); mgr.redraw(); } }))];
-          },
-          empty: () => h("p", { class: "muted small pad" }, "No items."),
-        };
-        return st;
-      } });
-    return mgr;
-  };
-  const coinInputs = (obj, have) => h("div", { class: "coin-grid small" }, coinOrder().map(k =>
-    h("label", { class: "field coin-field " + k },
-      h("span", null, k.toUpperCase() + (have ? ` (${(have[k] || 0).toLocaleString()})` : "")),
-      h("input", { type: "number", min: 0, max: have?.[k], inputmode: "numeric", value: obj[k] || "",
-        oninput: ev => { obj[k] = Math.max(0, Math.floor(+ev.target.value || 0)); } }))));
-
-  const drawAsk = () => {
-    for (const k of coinOrder()) delete askCoins[k];
-    ask.clear();
-    askBox.replaceChildren(picker("ask", () => target, ask));
-    askCoinBox.replaceChildren(coinInputs(askCoins, target.coins || {}));
-  };
-  giveBox.replaceChildren(picker("give", () => me, give));
-  drawAsk();
-
-  const side = (map, char) => ({
-    items: [...map].filter(([u]) => { const e = char.items.find(x => x.uid === u); return e && !insideSelected(char, e, map); })
-      .map(([u, qty]) => ({ uid: u, qty })),
-  });
-  const send = async () => {
-    const offer = {
-      from: me.id, to: target.id, note,
-      give: { ...side(give, me), coins: { ...giveCoins } },
-      ask: { ...side(ask, target), coins: { ...askCoins } },
-    };
-    if (!offer.give.items.length && !offer.ask.items.length &&
-        !coinOrder().some(k => giveCoins[k] || askCoins[k])) return toast("Pick something to trade");
-    const short = coinOrder().find(k => (giveCoins[k] || 0) > (me.coins[k] || 0));
-    if (short) return toast(`You don't have ${giveCoins[short]} ${short}`);
+  const go = async target => {
     try {
-      // Make sure the server has our latest inventory before referencing it.
-      await party.put(me.id);
-      await party.offer(offer);
-      close();
-      toast(`Offer sent to ${target.name}`);
-    } catch (e) {
-      toast(e.message);
-    }
+      await party.put(me.id); // (the host has this inventory as it is now, before it's referenced)
+      const r = await party.api("POST", "api/share", { kind: "trade", from: me.id, with: target.id });
+      party.applySnapshot(await party.api("GET", "api/state"));
+      const s = (party.shares || []).find(x => x.id === r.id);
+      if (!s) return;
+      if (preselectUid) await tradeSide(s, me.id, side => { if (!side.items.some(i => i.uid === preselectUid)) side.items.push({ uid: preselectUid, qty: 1 }); });
+      openTradeShare((party.shares || []).find(x => x.id === r.id) || s);
+    } catch (e) { toast(e.message); }
   };
-
-  const body = h("div", { class: "form" },
-    h("label", { class: "field" }, h("span", null, "Trade with"),
-      h("select", { onchange: ev => { target = others.find(c => c.id === ev.target.value); drawAsk(); } },
-        others.map(c => h("option", { value: c.id, selected: c === target }, c.name + (c.online ? "" : " (offline)"))))),
-    h("div", { class: "trade-grid" },
-      h("div", { class: "trade-col" }, h("h4", null, `${me.name} gives`), giveBox, h("h4", null, "Coins"), coinInputs(giveCoins, me.coins)),
-      h("div", { class: "trade-col" }, h("h4", null, "In return, ask for"), askBox, h("h4", null, "Coins"), askCoinBox)),
-    h("label", { class: "field" }, h("span", null, "Note (optional)"),
-      h("input", { type: "text", maxlength: 500, placeholder: "e.g. For the rope you lent me", oninput: ev => { note = ev.target.value; } })),
-    h("p", { class: "muted small" }, "Nothing moves until they accept. Giving a container also gives what's in it."));
-  close = openModal("Offer a trade", body, { wide: true, footer: [
-    h("button", { class: "btn", onclick: () => close() }, "Cancel"),
-    h("button", { class: "btn primary", onclick: send }, icon("move"), "Send offer"),
-  ] });
+  const target = others.find(c => c.id === targetId);
+  if (target) return go(target);
+  let close;
+  close = openModal("Trade with…", h("div", { class: "group" }, others.map(c => h("button", { type: "button", class: "row row-main switch",
+    onclick: () => { close(); go(c); } }, onlineDot(c.online), h("span", { class: "grow" }, c.name), c.mine && h("span", { class: "tag" }, "yours")))));
 }
+
+// Which side of a trade is this device's (its character), and the other's.
+const tradeMe = s => [s.from, s.with].find(id => party.isLinked(id)) || null;
+const tradeOther = s => tradeMe(s) === s.from ? s.with : s.from;
+const tradeName = (s, id) => id === s.from ? s.fromName : s.withName;
+// A side as it's sent: its items and asks as uid and qty, its coins and note.
+const editableSide = side => ({ items: (side?.items || []).map(i => ({ uid: i.uid, qty: i.qty })), coins: { ...(side?.coins || {}) },
+  asks: (side?.asks || []).map(a => ({ uid: a.uid, qty: a.qty })), note: side?.note || "" });
+// Change this device's side: fn(side) changes a copy, which is sent (both agreements clear).
+async function tradeSide(s, cid, fn) {
+  const side = editableSide(s.sides?.[cid]);
+  fn(side);
+  try { await party.put(cid); await party.api("POST", `api/share/${s.id}/side`, { character: cid, ...side }); }
+  catch (e) { toast(e.message); }
+}
+
+// Pick some of a character's items (with how many), as the old offer window did: a search, a pick
+// on each; what's inside a picked container goes with it. done(map uid -> qty).
+function pickEntries(title, char, picked, done) {
+  const map = new Map(picked);
+  const insideSelected = e => { for (let p = e.parent; p; p = char.items.find(x => x.uid === p)?.parent) if (map.has(p)) return true; return false; };
+  resetList("trade-pick");
+  let mgr;
+  mgr = itemManager({ key: "trade-pick", prefsKey: "trade", sorts: INVENTORY_SORTS, sort: "name", placeholder: "Search items…",
+    storage: () => {
+      const st = {
+        char, id: "trade:" + char.id, rootLabel: "On person", keep: e => map.has(e.uid),
+        open: e => openStoredItem(st, e),
+        rowClass: e => map.has(e.uid) ? "picked" : insideSelected(e) ? "included" : "",
+        sub: e => insideSelected(e) ? "goes with its container" : null,
+        extras: e => {
+          const included = insideSelected(e), checked = map.has(e.uid);
+          return [
+            checked && e.qty > 1 && h("input", { type: "number", class: "trade-n", min: 1, max: e.qty, value: map.get(e.uid), inputmode: "numeric",
+              "aria-label": `How many ${entryName(e)}`, onchange: ev => map.set(e.uid, Math.max(1, Math.min(e.qty, Math.floor(+ev.target.value || 1)))) }),
+            h("label", { class: "check trade-pick" }, h("input", { type: "checkbox", checked: checked || included, disabled: included, "aria-label": `Pick ${entryName(e)}`,
+              onchange: ev => { ev.target.checked ? map.set(e.uid, 1) : map.delete(e.uid); mgr.redraw(); } }))];
+        },
+        empty: () => h("p", { class: "muted small pad" }, "No items."),
+      };
+      return st;
+    } });
+  let close;
+  close = openModal(title, h("div", { class: "picker" }, mgr), { wide: true, footer: [
+    h("button", { class: "btn", onclick: () => close() }, "Cancel"),
+    h("button", { class: "btn primary", onclick: () => { close(); done(new Map([...map].filter(([u]) => { const e = char.items.find(x => x.uid === u); return e && !insideSelected(e); }))); } }, icon("check"), "Done")] });
+}
+
+// What's in a trade, for the other side to see: an item (from its entry), how many, what's inside.
+const tradeItemRow = (it, extras = null, cls = "") => h("div", { class: "trade-row " + cls },
+  it.entry ? itemIcon(it.entry.item, "row-icon") : h("span", { class: "row-icon" }),
+  h("button", { type: "button", class: "trade-main", onclick: () => it.entry && openModal(it.name, itemDetails(it.entry.item, null, it.entry.srcId)) },
+    h("span", { class: "row-title" }, it.name, it.qty > 1 && ` ×${it.qty.toLocaleString()}`),
+    it.inside > 0 && h("span", { class: "row-sub" }, `with ${plural(it.inside, "thing")} inside`)),
+  extras);
+const coinWords = coins => coinOrder().filter(k => coins?.[k]).map(k => `${coins[k].toLocaleString()} ${k}`).join(", ");
+
+// A trade's screen: the two sides, who has agreed, Agree and Walk away. Redrawn as it changes.
+function openTradeShare(s0) {
+  const id = "share:" + s0.id, body = h("div", { class: "trade-live" });
+  const cur = () => (party.shares || []).find(x => x.id === s0.id);
+  const foot = h("div", { class: "inline wrap trade-foot" });
+  const draw = () => {
+    const s = cur();
+    if (!s) return;
+    tradeSeen.set(s.id, tradeSig(s));
+    markShareSeen(s);
+    const meId = tradeMe(s), otherId = tradeOther(s), me = store.state.characters.find(c => c.id === meId), other = party.chars.find(c => c.id === otherId);
+    const mine = s.sides?.[meId] || {}, theirs = s.sides?.[otherId] || {};
+    const agreed = id => (s.agreed || []).includes(id);
+    const change = fn => tradeSide(s, meId, fn);
+    // My side: what I give (drag in from the inventory beside it, or + Add), coins, a note; what they asked for of mine.
+    const asksOfMine = (theirs.asks || []).filter(a => !(mine.items || []).some(i => i.uid === a.uid));
+    const drop = h("div", { class: "trade-drop",
+      ondragover: ev => { if (ev.dataTransfer.types.includes("text/entry")) { ev.preventDefault(); drop.classList.add("over"); } },
+      ondragleave: () => drop.classList.remove("over"),
+      ondrop: ev => { ev.preventDefault(); drop.classList.remove("over"); const [from, uid] = ev.dataTransfer.getData("text/entry").split("|");
+        if (from === "inv" && me?.items.some(e => e.uid === uid)) change(side => { if (!side.items.some(i => i.uid === uid)) side.items.push({ uid, qty: 1 }); }); } },
+      "Drag items here from your inventory, or ",
+      h("button", { type: "button", class: "link", onclick: () => pickEntries(`What ${me?.name || "you"} gives`, me, (mine.items || []).map(i => [i.uid, i.qty]),
+        map => change(side => { side.items = [...map].map(([uid, qty]) => ({ uid, qty })); })) }, "+ Add"));
+    const myCol = h("div", { class: "trade-side mine" },
+      h("h4", null, `${tradeName(s, meId)} gives`, h("span", { class: "muted small" }, " (you)")),
+      (mine.items || []).map(it => tradeItemRow(it, [
+        (me?.items.find(e => e.uid === it.uid)?.qty || 1) > 1 && h("input", { type: "number", class: "trade-n", min: 1, max: me.items.find(e => e.uid === it.uid).qty, value: it.qty,
+          "aria-label": `How many ${it.name}`, onchange: ev => change(side => { const x = side.items.find(i => i.uid === it.uid); if (x) x.qty = Math.max(1, Math.floor(+ev.target.value || 1)); }) }),
+        iconBtn("x", `Take ${it.name} out`, () => change(side => { side.items = side.items.filter(i => i.uid !== it.uid); }))])),
+      asksOfMine.map(a => h("div", { class: "trade-row ask" }, h("span", { class: "row-icon" }),
+        h("div", { class: "trade-main" }, h("span", { class: "row-title" }, a.name, a.qty > 1 && ` ×${a.qty}`), h("span", { class: "row-sub" }, `asked for by ${tradeName(s, otherId)}`)),
+        me?.items.some(e => e.uid === a.uid) && h("button", { class: "btn", onclick: () => change(side => { side.items.push({ uid: a.uid, qty: a.qty }); }) }, "Put it in"))),
+      drop,
+      h("div", { class: "coin-grid small" }, coinOrder().filter(k => (me?.coins?.[k] || 0) > 0 || mine.coins?.[k]).map(k => h("label", { class: "field coin-field " + k },
+        h("span", null, `${k.toUpperCase()} (${(me?.coins?.[k] || 0).toLocaleString()})`),
+        h("input", { type: "number", min: 0, max: me?.coins?.[k] || 0, inputmode: "numeric", value: mine.coins?.[k] || "", "aria-label": `${k} you give`,
+          onchange: ev => change(side => { const n = Math.max(0, Math.floor(+ev.target.value || 0)); if (n) side.coins[k] = n; else delete side.coins[k]; }) })))),
+      h("input", { type: "text", class: "trade-note-input", maxlength: 300, value: mine.note || "", placeholder: "A note (optional)", "aria-label": "A note",
+        onchange: ev => change(side => { side.note = ev.target.value; }) }),
+      h("div", { class: "trade-agree" + (agreed(meId) ? " yes" : "") }, agreed(meId) ? "✓ You agree" : "You haven't agreed"));
+    // Their side: what they give; what I asked for of theirs (+ Ask for…).
+    const myAsks = (mine.asks || []).filter(a => !(theirs.items || []).some(i => i.uid === a.uid));
+    const theirCol = h("div", { class: "trade-side theirs" },
+      h("h4", null, `${tradeName(s, otherId)} gives`),
+      (theirs.items || []).map(it => tradeItemRow(it)),
+      theirs.coins && coinWords(theirs.coins) && h("p", { class: "trade-coins" }, coinWords(theirs.coins)),
+      myAsks.map(a => h("div", { class: "trade-row ask" }, h("span", { class: "row-icon" }),
+        h("div", { class: "trade-main" }, h("span", { class: "row-title" }, a.name, a.qty > 1 && ` ×${a.qty}`), h("span", { class: "row-sub" }, "asked for by you")),
+        iconBtn("x", "Don't ask for it", () => change(side => { side.asks = side.asks.filter(x => x.uid !== a.uid); })))),
+      !(theirs.items || []).length && !coinWords(theirs.coins) && !myAsks.length && h("p", { class: "muted small" }, "Nothing yet."),
+      other && h("button", { type: "button", class: "btn trade-ask", onclick: () => pickEntries(`Ask ${other.name} for…`, { ...other, items: other.items.filter(e => !hiddenFromMe(other, e)) },
+        (mine.asks || []).map(a => [a.uid, a.qty]), map => change(side => { side.asks = [...map].map(([uid, qty]) => ({ uid, qty })); })) }, icon("plus"), "Ask for…"),
+      theirs.note && h("p", { class: "trade-note-shown" }, "“", theirs.note, "”"),
+      h("div", { class: "trade-agree" + (agreed(otherId) ? " yes" : "") }, agreed(otherId) ? `✓ ${tradeName(s, otherId)} agrees` : `${tradeName(s, otherId)} hasn't agreed`));
+    setChildren(body,
+      s.reason && h("p", { class: "banner warn small" }, "It couldn't be made: ", s.reason),
+      h("div", { class: "trade-live-sides" }, myCol, theirCol),
+      me && atHandStrip(me, e => (mine.items || []).some(i => i.uid === e.uid) ? []
+        : [{ label: "Put it in what you give", run: () => change(side => { side.items.push({ uid: e.uid, qty: 1 }); }) }]),
+      h("p", { class: "muted small" }, "Each of you puts in what you give, and can ask for something of the other's. Any change clears both agreements; when you both agree, it all changes hands at once. Giving a container gives what's in it."));
+    setChildren(foot,
+      h("button", { class: "btn", onclick: () => confirmDialog(`Walk away from the trade with ${tradeName(s, otherId)}? It ends for both of you.`, "Walk away", () => endShare(s)) }, "Walk away"),
+      h("button", { class: "btn " + (agreed(meId) ? "" : "primary"), onclick: async () => {
+        try { await party.api("POST", `api/share/${s.id}/agree`, { character: meId, agree: !agreed(meId) }); } catch (e) { toast(e.message); }
+      } }, icon(agreed(meId) ? "undo" : "check"), agreed(meId) ? "Not yet" : "Agree"));
+  };
+  const close = sharedScreen(id, `Trade: ${s0.fromName} ⇄ ${s0.withName}`, body, { footer: foot, redraw: draw });
+  draw();
+  return close;
+}
+// What a trade looked like when this device last had it open (so a change marks it in the tray).
+const tradeSeen = new Map();
+const tradeSig = s => JSON.stringify([s.sides, s.agreed, s.reason]);
 
 // ------------------------------------------------------------------ the GM's states and limits
 
@@ -786,9 +832,9 @@ function gmLimits(c) {
 }
 
 // ------------------------------------------------------------------ showing an item
-// In a party, an item can be shown to some of the party and the GM (Show… in its menu): it pops up
-// for them to look at; nothing moves. The host keeps it until everyone has seen it (server.py:
-// prune_shows).
+// In a party, an item can be shown to some of the party and the GM (Show… in its menu): a shared
+// screen (js/shared.js) for them to look at; nothing moves. It stays until whoever showed it ends
+// it (server.py: share_api).
 
 // The entries inside an entry (for showing a container with what's in it).
 function entryContents(char, e) {
@@ -814,16 +860,16 @@ function openShowItem(entryUid) {
     if (!chosen.size && !gm) return toast("Choose who to show it to");
     close();
     try {
-      await party.api("POST", "api/show", { from: party.isLinked(char.id) ? char.id : "", item: shownEntry(char, e),
+      await party.api("POST", "api/share", { kind: "item", from: party.isLinked(char.id) ? char.id : "", item: shownEntry(char, e),
         contents: entryContents(char, e).map(x => shownEntry(char, x)), to: [...chosen], gm });
       const names = [...others.filter(c => chosen.has(c.id)).map(c => c.name), gm && `the ${term("gm")}`].filter(Boolean);
-      toast(`Showing ${entryName(e)} to ${names.join(", ")}`);
+      toast(`Showing ${entryName(e)} to ${names.join(", ")}: end it in Shared when you're done`);
     } catch (err) {
       toast(err.status === 404 && /Unknown|endpoint/i.test(err.message) ? "The party's host needs the latest version of the app to show items" : err.message);
     }
   };
   close = openModal(`Show ${entryName(e)}`, h("div", { class: "form" },
-    h("p", { class: "muted small" }, "It pops up for them to look at. Nothing changes hands."),
+    h("p", { class: "muted small" }, "It opens for them to look at, and stays in their Shared until you end it. Nothing changes hands."),
     h("div", { class: "group" },
       others.map(c => h("label", { class: "row check-row" },
         h("input", { type: "checkbox", checked: chosen.has(c.id), onchange: ev => { ev.target.checked ? chosen.add(c.id) : chosen.delete(c.id); } }),
@@ -834,31 +880,21 @@ function openShowItem(entryUid) {
   { footer: [h("button", { class: "btn", onclick: () => close() }, "Cancel"), h("button", { class: "btn primary", onclick: send }, icon("eye"), "Show it")] });
 }
 
-// Who on this device a show is for: its characters it was shown to, and "gm" (shown to the GM, on
-// a GM's device), not yet seen.
-const showFor = s => [...s.to.filter(id => party.isLinked(id)), ...(s.gm && party.isGm() ? ["gm"] : [])].filter(w => !s.seen.includes(w));
-
-// Pops up items shown to this device, one at a time (called on every render).
-const showsOpen = new Set();
-function syncShows() {
-  if (!party.active) return;
-  const next = (party.shows || []).find(s => showFor(s).length && !showsOpen.has(s.id));
-  if (!next || document.querySelector("#modal-root .show-pop")) return;
-  showsOpen.add(next.id);
-  openShownItem(next);
-}
-
-function openShownItem(s) {
+// An item shared with this device (or by it): its screen. Opening it counts as seen.
+function openItemShare(s) {
   const e = s.item, it = e.item;
-  const seen = () => { for (const w of showFor(s)) party.api("POST", `api/show/${s.id}/seen`, { character: w }).catch(() => {}); };
-  const close = openModal(`${s.fromName} shows you…`, h("div", { class: "show-pop" },
+  markShareSeen(s);
+  let close;
+  close = sharedScreen("share:" + s.id, s.fromMine ? `You're showing ${entryName(e)}` : `${s.fromName} shows you…`, h("div", { class: "show-pop" },
     h("p", null, h("b", null, entryName(e)), e.qty > 1 && ` ×${e.qty.toLocaleString()}`, e.customName && h("span", { class: "muted small" }, ` (${it.name})`)),
     s.to.length > 1 && h("p", { class: "muted small" }, `Shown to ${s.to.map(id => party.chars.find(c => c.id === id)?.name || "someone").join(", ")}${s.gm ? ` and the ${term("gm")}` : ""}.`),
     e.notes && h("p", { class: "small" }, e.notes),
     itemDetails(it, null, e.srcId),
     s.contents.length > 0 && h("div", { class: "field" }, h("span", null, "Inside"),
       h("ul", { class: "show-contents" }, s.contents.filter(x => x.parent === e.uid).map(x => h("li", null, entryName(x), x.qty > 1 && ` ×${x.qty}`))))),
-  { footer: [h("button", { class: "btn primary", onclick: () => { seen(); close(); } }, icon("check"), "Seen")] });
+  { footer: [
+    s.fromMine && h("button", { class: "btn danger", onclick: () => { close(); endShare(s); } }, "End"),
+    h("button", { class: "btn primary", onclick: () => close() }, s.fromMine ? "Close" : "Done for now")] });
 }
 
 // ------------------------------------------------------------------ discarding
@@ -870,7 +906,7 @@ async function discardEntry(entryUid, after) {
   if (!e) return;
   const name = entryName(e) + (e.qty > 1 ? ` (×${e.qty.toLocaleString()})` : "");
   const inside = holdsItems(char, e) && char.items.some(x => x.parent === e.uid);
-  confirmDialog(`Discard ${name}? It goes to the ${term("gm")} (their Treasure tab, Discarded).${inside ? " What's in it stays with you." : ""}`, "Discard", async () => {
+  confirmDialog(`Discard ${name}? It goes to the ${term("gm")} (their Items → Treasure, Discarded).${inside ? " What's in it stays with you." : ""}`, "Discard", async () => {
     after?.();
     // (all of it, layers and rules too: it's the GM's now)
     const copy = { ...clone(e), parent: null, equipped: false }; delete copy.compartment;

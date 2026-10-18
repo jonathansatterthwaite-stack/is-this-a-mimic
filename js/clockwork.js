@@ -144,6 +144,19 @@ clockwork.value("local.*", { label: "An item's Local value, else its character's
 clockwork.value("global.*", { label: "A Global value", get: (c, name) => globalValue(name) });
 // A panel's control, as it's used (its rules: "A control is used"): its value after the change.
 clockwork.value("control.value", { label: "The control's value, as it's used", get: c => c.controlValue });
+// A socket, as it's used (an item put in or taken out): whether it holds something now, and that
+// item (the one put in, or the one taken out): its weight, worth, how many, and whether it's a
+// certain catalog item or one of a template ("control.item.is.<id>" / "….template:<id>": 1 or 0).
+clockwork.value("control.has", { label: "1 when the socket holds something", get: c => c.socketHas == null ? undefined : c.socketHas ? 1 : 0 });
+clockwork.value("control.item.weight", { label: "The socket's item: its weight", get: c => c.controlItem?.weight });
+clockwork.value("control.item.worth", { label: "The socket's item: its worth", get: c => c.controlItem?.worth });
+clockwork.value("control.item.qty", { label: "The socket's item: how many", get: c => c.controlItem?.qty });
+clockwork.value("control.item.is.*", { label: "1 when the socket's item is that item (or one of that template)", get: (c, key) => {
+  const it = c.controlItem;
+  if (!it) return undefined;
+  const tpl = /^template:(.+)$/.exec(key);
+  return (tpl ? it.templates.includes(tpl[1]) : it.ids.includes(key)) ? 1 : 0;
+} });
 
 // ------------------------------------------------------------------ objects and scopes
 // (docs/clockwork-overhaul-plan.md) Everything interactive is an object of a kind: the world (the

@@ -283,7 +283,7 @@ const party = {
   takeRoles(snap) {
     this.shops = snap.shops || [];
     this.treasure = snap.treasure || []; // treasure being shown (js/treasure.js)
-    this.shows = snap.shows || []; // items shown to this device's characters, or by them (js/party-ui.js)
+    this.shares = snap.shares || []; // shared screens: with this device's characters, or by them (js/shared.js)
     this.discards = snap.discards || []; // discarded items waiting for a GM's device
     this.gm = snap.gm || {};
     // The host's clock, which moving values follow (js/clockwork.js): how far ahead of ours it is.
@@ -408,7 +408,6 @@ const party = {
     const urls = (this.info?.addresses || []).map(a => `http://${a}:${port}`);
     return urls.length ? urls : [this.base ? this.base.replace(/\/$/, "") : location.origin];
   },
-  incoming() { return this.trades.filter(t => t.status === "pending" && t.toMine); },
 
   connect() {
     this.events?.close();
@@ -467,7 +466,7 @@ const party = {
     kv.remove(JOINED_KEY);
     clearInterval(this.retryTimer);
     for (const t of this.timers.values()) clearTimeout(t);
-    Object.assign(this, { active: false, connected: false, base: "", info: null, token: null, chars: [], trades: [], shops: [], gm: {}, role: "player", isHostDevice: false, runsWorld: false, devices: [], campaign: null, unreachable: null });
+    Object.assign(this, { active: false, connected: false, base: "", info: null, token: null, chars: [], trades: [], tradesKnown: false, shares: [], shops: [], gm: {}, role: "player", isHostDevice: false, runsWorld: false, devices: [], campaign: null, unreachable: null });
     this.synced = new Map();
     this.undecided = new Set();
     this.uploaded = new Set();
@@ -524,14 +523,15 @@ const party = {
 
     if (typeof shopStore !== "undefined" && shopStore.canManage()) shopStore.refresh(); // live stock for the host
     if (conflict) toast("Your inventory changed on the server (a trade?) — showing the latest version");
-    for (const t of this.trades) {
-      const old = before.find(b => b.id === t.id);
-      if (!old && t.status === "pending" && t.toMine) toast(`${t.fromName} offered you a trade — see Party`);
-      if (old && old.status === "pending" && t.status !== "pending" && t.fromMine) {
-        const verb = { accepted: "accepted", declined: "declined", failed: "couldn't complete", cancelled: "cancelled" }[t.status];
-        toast(`${t.toName} ${verb} your trade${t.reason ? ": " + t.reason : ""}`);
-      }
+    // A trade just made or walked away from (js/party-ui.js): what changed hands, or who walked away.
+    if (this.tradesKnown) for (const t of this.trades) {
+      if (before.some(b => b.id === t.id) || !(t.fromMine || t.toMine)) continue;
+      if (t.status === "accepted") {
+        const got = describeSide(t.fromMine ? t.ask : t.give), gave = describeSide(t.fromMine ? t.give : t.ask);
+        toast(`Traded with ${t.fromMine ? t.toName : t.fromName}: you got ${got}; you gave ${gave}`);
+      } else if (t.status === "cancelled") toast(`The trade with ${t.fromMine ? t.toName : t.fromName} is off${t.reason ? `: ${t.reason}` : ""}`);
     }
+    this.tradesKnown = true;
     render();
   },
 
@@ -657,15 +657,4 @@ const party = {
     await fetch("api/quit", { method: "POST", cache: "no-store" });
   },
 
-  async offer(trade) {
-    await this.api("POST", "api/trades", trade);
-  },
-
-  async act(tradeId, action) {
-    try {
-      await this.api("POST", `api/trades/${encodeURIComponent(tradeId)}/${action}`);
-    } catch (e) {
-      toast(e.message);
-    }
-  },
 };

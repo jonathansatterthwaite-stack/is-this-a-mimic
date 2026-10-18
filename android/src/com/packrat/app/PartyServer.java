@@ -132,7 +132,7 @@ public class PartyServer {
     private JSONArray trades = new JSONArray();
     private JSONArray shops = new JSONArray();
     private JSONArray treasure = new JSONArray(); // treasure being shown to players (see treasureApi)
-    private JSONArray shows = new JSONArray(); // items being shown (see showApi)
+    private JSONArray shares = new JSONArray(); // shared screens (see shareApi)
     private JSONArray discards = new JSONArray(); // discarded items waiting for a GM's device (see discardApi)
     /** GM values (see gm_api in server.py): {party: {name: v}, characters: {id: {…}}, items: {"charId/uid": {…}}}. */
     private JSONObject gm = new JSONObject();
@@ -348,7 +348,7 @@ public class PartyServer {
         trades = data.optJSONArray("trades") != null ? data.optJSONArray("trades") : new JSONArray();
         shops = data.optJSONArray("shops") != null ? data.optJSONArray("shops") : new JSONArray();
         treasure = data.optJSONArray("treasure") != null ? data.optJSONArray("treasure") : new JSONArray();
-        shows = data.optJSONArray("shows") != null ? data.optJSONArray("shows") : new JSONArray();
+        shares = data.optJSONArray("shares") != null ? data.optJSONArray("shares") : new JSONArray();
         discards = data.optJSONArray("discards") != null ? data.optJSONArray("discards") : new JSONArray();
         gm = data.optJSONObject("gm") != null ? data.optJSONObject("gm") : new JSONObject();
         campaign = data.optJSONObject("campaign");
@@ -366,7 +366,7 @@ public class PartyServer {
             data.put("trades", trades);
             data.put("shops", shops);
             data.put("treasure", treasure);
-            data.put("shows", shows);
+            data.put("shares", shares);
             data.put("discards", discards);
             data.put("gm", gm);
             data.put("partyId", partyId);
@@ -518,12 +518,12 @@ public class PartyServer {
             if (in) shown.put(t);
         }
         snap.put("treasure", shown);
-        // Items shown: to the devices of those they're shown to (a GM's, when shown to the GM), and
-        // to whoever showed them. Discarded items wait for a GM's device to take them.
-        pruneShows();
+        // Shared screens: to the devices of those they're shared with (a GM's, when shared with the
+        // GM), and to whoever shared them. Discarded items wait for a GM's device to take them.
+        pruneShares();
         JSONArray myShows = new JSONArray();
-        for (int i = 0; i < shows.length(); i++) {
-            JSONObject s = shows.getJSONObject(i);
+        for (int i = 0; i < shares.length(); i++) {
+            JSONObject s = shares.getJSONObject(i);
             JSONArray to = s.getJSONArray("to");
             boolean in = (gmView && s.optBoolean("gm")) || s.optString("by").equals(token);
             for (int j = 0; !in && j < to.length(); j++) in = mine.contains(to.optString(j));
@@ -532,7 +532,7 @@ public class PartyServer {
             copy.put("fromMine", s.optString("by").equals(token));
             myShows.put(copy);
         }
-        snap.put("shows", myShows);
+        snap.put("shares", myShows);
         if (gmView) {
             snap.put("discards", new JSONArray(discards.toString()));
             // With no GMs chosen the host is the GM; else one GM device runs the world rules.
@@ -1486,36 +1486,79 @@ public class PartyServer {
         e.put("history", out);
     }
 
-    private static final long SHOW_TTL_MS = 2L * 60 * 60 * 1000;
+    private static final long SHARE_TTL_MS = 24L * 60 * 60 * 1000;
     // (Kept in memory and in the party's save: a player can't fill them up.)
-    private static final int SHOW_MAX_BYTES = 300_000, SHOWS_PER_DEVICE = 20, DISCARD_MAX_BYTES = 1_000_000, DISCARDS_PER_CHARACTER = 50;
+    private static final int SHARE_MAX_BYTES = 300_000, SHARES_PER_DEVICE = 20, DISCARD_MAX_BYTES = 1_000_000, DISCARDS_PER_CHARACTER = 50;
+    private static final int PANEL_MAX_BYTES = 2_000_000, PANEL_USES_MAX = 200;
 
-    /** Shows go once everyone they're shown to has seen them, or after two hours. */
-    private void pruneShows() throws JSONException {
-        long cutoff = System.currentTimeMillis() - SHOW_TTL_MS;
+    /** Shared screens stay until whoever shared them ends them (or leaves), a day at most. */
+    private void pruneShares() throws JSONException {
+        long cutoff = System.currentTimeMillis() - SHARE_TTL_MS;
         JSONArray keep = new JSONArray();
-        for (int i = 0; i < shows.length(); i++) {
-            JSONObject s = shows.getJSONObject(i);
-            if (s.optLong("at") > cutoff && !seenByAll(s)) keep.put(s);
+        for (int i = 0; i < shares.length(); i++) {
+            JSONObject s = shares.getJSONObject(i);
+            if (s.optLong("at") > cutoff) keep.put(s);
+            else returnSocketItems(s); // (what players put in a shown panel's sockets isn't lost with it)
         }
-        shows = keep;
+        shares = keep;
     }
 
-    private static boolean seenByAll(JSONObject s) throws JSONException {
-        Set<String> seen = new HashSet<>();
-        JSONArray sn = s.getJSONArray("seen"), to = s.getJSONArray("to");
-        for (int i = 0; i < sn.length(); i++) seen.add(sn.optString(i));
-        for (int i = 0; i < to.length(); i++) if (!seen.contains(to.optString(i))) return false;
-        return !s.optBoolean("gm") || seen.contains("gm");
-    }
-
-    private JSONObject showApi(Request req, List<String> parts, String token) throws ApiError, JSONException {
+    /** Shared screens (see share_api in server.py): kind "item" so far. */
+    private JSONObject shareApi(Request req, List<String> parts, String token) throws ApiError, JSONException, TradeError {
         boolean isGm = isGm(req, token);
         JSONObject body = req.method.equals("POST") ? req.json() : new JSONObject();
         synchronized (lock) {
             JSONObject r = new JSONObject();
             if (req.method.equals("POST") && parts.isEmpty()) {
                 if (!partyEnabled()) throw new ApiError(404, "No party is being hosted");
+                String kind = body.optString("kind", "item");
+                if (kind.equals("trade")) return startTrade(body, token);
+                if (kind.equals("panel")) {
+                    if (!isGm) throw new ApiError(403, "Only a GM can show a panel");
+                    JSONArray to = new JSONArray(), in = body.optJSONArray("to");
+                    for (int i = 0; in != null && i < in.length() && to.length() < 30; i++) if (characters.has(in.optString(i))) to.put(in.optString(i));
+                    if (to.length() == 0) throw new ApiError(400, "Choose who to show it to");
+                    if (body.optJSONObject("panel") == null) throw new ApiError(400, "Nothing to show");
+                    int mine = 0;
+                    for (int i = 0; i < shares.length(); i++) if (shares.getJSONObject(i).optString("by").equals(token)) mine++;
+                    if (shares.length() >= 200 || mine >= SHARES_PER_DEVICE) throw new ApiError(429, "You're sharing too much: end something first");
+                    JSONObject s = new JSONObject();
+                    s.put("id", newId("s"));
+                    s.put("kind", "panel");
+                    s.put("by", token);
+                    s.put("from", "");
+                    s.put("fromName", "The GM");
+                    s.put("to", to);
+                    s.put("gm", false);
+                    s.put("seen", new JSONArray());
+                    s.put("at", System.currentTimeMillis());
+                    s.put("panelId", cut(body.optString("panelId", ""), 80));
+                    s.put("title", cut(body.optString("title", "Panel"), 80));
+                    s.put("panel", body.getJSONObject("panel"));
+                    s.put("uses", new JSONArray());
+                    JSONObject sockets = new JSONObject();
+                    JSONArray ctls = body.getJSONObject("panel").optJSONArray("controls");
+                    for (int i = 0; ctls != null && i < ctls.length(); i++) {
+                        JSONObject ctl = ctls.optJSONObject(i);
+                        if (ctl == null || !ctl.optString("type").equals("socket") || ctl.optJSONArray("held") == null) continue;
+                        JSONArray items = cleanTreasureItems(ctl.getJSONArray("held"));
+                        if (items.length() == 0) continue;
+                        JSONObject holder = new JSONObject();
+                        holder.put("id", "socket-" + s.getString("id") + "-" + ctl.optString("id"));
+                        holder.put("name", cut(ctl.optString("label", "the socket").isEmpty() ? "the socket" : ctl.optString("label"), 60));
+                        holder.put("items", items);
+                        holder.put("by", "");
+                        holder.put("byName", "The GM");
+                        sockets.put(ctl.optString("id"), holder);
+                    }
+                    s.put("sockets", sockets);
+                    if (s.toString().length() > PANEL_MAX_BYTES) throw new ApiError(413, "That panel is too big to show");
+                    shares.put(s);
+                    changed(true);
+                    r.put("id", s.getString("id"));
+                    return r;
+                }
+                if (!kind.equals("item")) throw new ApiError(400, "Not something that can be shared");
                 String from = body.optString("from", "");
                 JSONObject c = from.isEmpty() ? null : characters.optJSONObject(from);
                 if (!from.isEmpty() && (c == null || !c.optString("owner").equals(token))) throw new ApiError(403, "You can only show your own characters' things");
@@ -1532,12 +1575,13 @@ public class PartyServer {
                 boolean toGm = body.optBoolean("gm");
                 if (to.length() == 0 && !toGm) throw new ApiError(400, "Choose who to show it to");
                 int mine = 0;
-                for (int i = 0; i < shows.length(); i++) if (shows.getJSONObject(i).optString("by").equals(token)) mine++;
-                if (shows.length() >= 200 || mine >= SHOWS_PER_DEVICE) throw new ApiError(429, "Too much is being shown: try again once it's been seen");
+                for (int i = 0; i < shares.length(); i++) if (shares.getJSONObject(i).optString("by").equals(token)) mine++;
+                if (shares.length() >= 200 || mine >= SHARES_PER_DEVICE) throw new ApiError(429, "You're sharing too much: end something first");
                 JSONArray contents = cleanTreasureItems(body.optJSONArray("contents")), kept = new JSONArray();
                 for (int i = 0; i < contents.length() && i < 200; i++) kept.put(contents.get(i));
                 JSONObject s = new JSONObject();
                 s.put("id", newId("s"));
+                s.put("kind", "item");
                 s.put("by", token);
                 s.put("from", from);
                 s.put("fromName", c != null ? c.optString("name") : "The GM");
@@ -1547,20 +1591,25 @@ public class PartyServer {
                 s.put("gm", toGm);
                 s.put("seen", new JSONArray());
                 s.put("at", System.currentTimeMillis());
-                if (s.toString().length() > SHOW_MAX_BYTES) throw new ApiError(413, "That's too big to show");
-                shows.put(s);
+                if (s.toString().length() > SHARE_MAX_BYTES) throw new ApiError(413, "That's too big to show");
+                shares.put(s);
                 changed(true);
                 r.put("id", s.getString("id"));
                 return r;
             }
             JSONObject s = null;
             int at = -1;
-            for (int i = 0; !parts.isEmpty() && i < shows.length(); i++) if (shows.getJSONObject(i).optString("id").equals(parts.get(0))) { s = shows.getJSONObject(i); at = i; }
-            if (s == null) throw new ApiError(404, "That isn't being shown any more");
+            for (int i = 0; !parts.isEmpty() && i < shares.length(); i++) if (shares.getJSONObject(i).optString("id").equals(parts.get(0))) { s = shares.getJSONObject(i); at = i; }
+            if (s == null) throw new ApiError(404, "That isn't being shared any more");
             String action = parts.size() > 1 ? parts.get(1) : null;
+            if (s.optString("kind").equals("panel") && ("panel".equals(action) || "use".equals(action) || "socket".equals(action)))
+                return panelShare(s, req.method, parts, body, token, isGm);
+            if (s.optString("kind").equals("trade") && ("side".equals(action) || "agree".equals(action) || req.method.equals("DELETE")))
+                return tradeShare(s, at, req.method, action, body, token, isGm);
             if (req.method.equals("DELETE") && action == null) {
-                if (!s.optString("by").equals(token) && !isGm) throw new ApiError(403, "Only whoever showed it can take it back");
-                shows.remove(at);
+                if (!s.optString("by").equals(token) && !isGm) throw new ApiError(403, "Only whoever shared it can end it");
+                if (s.optString("kind").equals("panel")) returnSocketItems(s);
+                shares.remove(at);
                 changed(true);
                 r.put("ok", true);
                 return r;
@@ -1580,13 +1629,380 @@ public class PartyServer {
                 boolean already = false;
                 for (int i = 0; i < seen.length(); i++) already |= seen.optString(i).equals(who);
                 if (!already) seen.put(who);
-                pruneShows();
                 changed(true);
                 r.put("ok", true);
                 return r;
             }
             throw new ApiError(404, "Unknown endpoint");
         }
+    }
+
+    /** A shown panel's calls: the GM's updates, players' uses and their being made (see panel_share in server.py). Call holding lock. */
+    private JSONObject panelShare(JSONObject s, String method, List<String> parts, JSONObject body, String token, boolean isGm) throws ApiError, JSONException {
+        String action = parts.get(1);
+        JSONObject r = new JSONObject();
+        if (action.equals("panel") && method.equals("POST")) {
+            if (!s.optString("by").equals(token)) throw new ApiError(403, "Only whoever showed it can change it");
+            if (body.optJSONObject("panel") == null) throw new ApiError(400, "Not a panel");
+            JSONObject before = s.getJSONObject("panel");
+            s.put("panel", body.getJSONObject("panel"));
+            if (body.has("title")) s.put("title", cut(body.optString("title", "Panel"), 80));
+            if (s.toString().length() > PANEL_MAX_BYTES) { s.put("panel", before); throw new ApiError(413, "That panel is too big to show"); }
+            changed(true);
+            r.put("ok", true);
+            return r;
+        }
+        if (action.equals("use") && method.equals("POST") && parts.size() == 2) {
+            String cid = body.optString("character", "");
+            JSONObject c = characters.optJSONObject(cid);
+            boolean in = false;
+            JSONArray to = s.getJSONArray("to");
+            for (int i = 0; i < to.length(); i++) in |= to.optString(i).equals(cid);
+            if (c == null || !c.optString("owner").equals(token) || !in) throw new ApiError(403, "That isn't shown to you");
+            String type = body.optString("type", "");
+            if (!type.equals("set") && !type.equals("used")) throw new ApiError(400, "Not a use");
+            JSONObject use = new JSONObject();
+            use.put("id", newId("u"));
+            use.put("character", cid);
+            use.put("type", type);
+            use.put("control", cut(body.optString("control", ""), 80));
+            use.put("at", System.currentTimeMillis());
+            Object v = body.opt("value");
+            boolean num = v instanceof Number;
+            if (type.equals("set")) {
+                if (!(body.opt("name") instanceof String) || !num) throw new ApiError(400, "Not a value");
+                use.put("name", cut(body.getString("name"), 80));
+                use.put("value", ((Number) v).doubleValue());
+            } else {
+                if (num) use.put("value", ((Number) v).doubleValue());
+                if (!body.optString("signal", "").isEmpty()) use.put("signal", cut(body.optString("signal"), 80));
+            }
+            JSONArray uses = s.optJSONArray("uses"), next = new JSONArray();
+            if (uses == null) uses = new JSONArray();
+            uses.put(use);
+            for (int i = Math.max(0, uses.length() - PANEL_USES_MAX); i < uses.length(); i++) next.put(uses.get(i));
+            s.put("uses", next);
+            changed(true);
+            r.put("id", use.getString("id"));
+            return r;
+        }
+        if (action.equals("socket") && method.equals("POST")) return socketCall(s, body, token, isGm);
+        if (action.equals("use") && method.equals("DELETE") && parts.size() == 3) {
+            if (!s.optString("by").equals(token)) throw new ApiError(403, "Only whoever showed it makes its uses");
+            JSONArray uses = s.optJSONArray("uses"), next = new JSONArray();
+            for (int i = 0; uses != null && i < uses.length(); i++) if (!uses.getJSONObject(i).optString("id").equals(parts.get(2))) next.put(uses.get(i));
+            s.put("uses", next);
+            changed(true);
+            r.put("ok", true);
+            return r;
+        }
+        throw new ApiError(404, "Unknown endpoint");
+    }
+
+    /** A socket of a shown panel: an item put in or taken out (see socket_call in server.py). Call holding lock. */
+    private JSONObject socketCall(JSONObject s, JSONObject body, String token, boolean gm) throws ApiError, JSONException {
+        String ctlId = body.optString("control", "");
+        JSONObject ctl = null;
+        JSONArray ctls = s.getJSONObject("panel").optJSONArray("controls");
+        for (int i = 0; ctls != null && i < ctls.length(); i++) {
+            JSONObject c = ctls.optJSONObject(i);
+            if (c != null && c.optString("id").equals(ctlId) && c.optString("type").equals("socket")) ctl = c;
+        }
+        if (ctl == null) throw new ApiError(404, "No such socket");
+        String label = cut(ctl.optString("label", "").isEmpty() ? "the socket" : ctl.optString("label"), 60);
+        if (s.optJSONObject("sockets") == null) s.put("sockets", new JSONObject());
+        JSONObject sockets = s.getJSONObject("sockets");
+        JSONObject held = sockets.optJSONObject(ctlId);
+        String cid = body.optString("character", "");
+        JSONObject what = null;
+        JSONArray inside = new JSONArray();
+        String kind;
+        boolean in = false;
+        JSONArray to = s.getJSONArray("to");
+        if (body.optBoolean("take")) {
+            if (held == null || held.getJSONArray("items").length() == 0) throw new ApiError(409, "There's nothing in it");
+            if (gm && cid.isEmpty()) { cid = held.optString("by", ""); body.put("byGm", true); }
+            for (int i = 0; i < to.length(); i++) in |= to.optString(i).equals(cid);
+            JSONObject c = characters.optJSONObject(cid);
+            if (c == null) throw new ApiError(400, "Nobody to give it to");
+            if (!gm && (!c.optString("owner").equals(token) || !in)) throw new ApiError(403, "That isn't shown to you");
+            JSONArray items = held.getJSONArray("items");
+            List<JSONObject> top = new ArrayList<>();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject e = items.getJSONObject(i);
+                if (e.isNull("parent") || e.optString("parent", "").isEmpty()) top.add(e); else inside.put(new JSONObject(e.toString()));
+            }
+            if (!top.isEmpty()) what = new JSONObject(top.get(0).toString());
+            for (JSONObject e : top) transfer(held, c, e.getString("uid"), e.optInt("qty", 1), "taken from " + label);
+            c.put("rev", c.optLong("rev") + 1);
+            sockets.remove(ctlId);
+            kind = "took";
+        } else {
+            if (held != null && held.getJSONArray("items").length() > 0) throw new ApiError(409, "Something's in it already");
+            for (int i = 0; i < to.length(); i++) in |= to.optString(i).equals(cid);
+            JSONObject c = characters.optJSONObject(cid);
+            if (c == null || !c.optString("owner").equals(token) || !in) throw new ApiError(403, "That isn't shown to you");
+            JSONObject e = findEntry(c, body.optString("uid", ""));
+            if (e == null) throw new ApiError(404, "You don't have that any more");
+            JSONObject holder = new JSONObject();
+            holder.put("id", "socket-" + s.getString("id") + "-" + ctlId);
+            holder.put("name", label);
+            holder.put("items", new JSONArray());
+            holder.put("by", cid);
+            holder.put("byName", c.optString("name"));
+            transfer(c, holder, e.getString("uid"), e.optInt("qty", 1), "put into " + label);
+            c.put("rev", c.optLong("rev") + 1);
+            sockets.put(ctlId, holder);
+            JSONArray items = holder.getJSONArray("items");
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject x = items.getJSONObject(i);
+                if (x.isNull("parent") || x.optString("parent", "").isEmpty()) { if (what == null) what = new JSONObject(x.toString()); }
+                else inside.put(new JSONObject(x.toString()));
+            }
+            kind = "put";
+        }
+        JSONObject use = new JSONObject();
+        use.put("id", newId("u"));
+        use.put("character", cid);
+        use.put("type", "used");
+        use.put("control", ctlId);
+        use.put("at", System.currentTimeMillis());
+        use.put("socket", kind);
+        if (body.optBoolean("byGm")) use.put("byGm", true);
+        use.put("entry", what == null ? JSONObject.NULL : what);
+        use.put("contents", inside);
+        JSONArray uses = s.optJSONArray("uses"), next = new JSONArray();
+        if (uses == null) uses = new JSONArray();
+        uses.put(use);
+        for (int i = Math.max(0, uses.length() - PANEL_USES_MAX); i < uses.length(); i++) next.put(uses.get(i));
+        s.put("uses", next);
+        changed(true);
+        JSONObject r = new JSONObject();
+        r.put("ok", true);
+        return r;
+    }
+
+    /** A shown panel ends: what players put in its sockets goes back to them. */
+    private void returnSocketItems(JSONObject s) throws JSONException {
+        JSONObject sockets = s.optJSONObject("sockets");
+        if (sockets == null) return;
+        Iterator<String> ks = sockets.keys();
+        while (ks.hasNext()) {
+            JSONObject held = sockets.getJSONObject(ks.next());
+            JSONObject c = characters.optJSONObject(held.optString("by", ""));
+            if (c == null) continue;
+            JSONArray items = held.getJSONArray("items");
+            List<JSONObject> top = new ArrayList<>();
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject e = items.getJSONObject(i);
+                if (e.isNull("parent") || e.optString("parent", "").isEmpty()) top.add(e);
+            }
+            for (JSONObject e : top) transfer(held, c, e.getString("uid"), e.optInt("qty", 1), "back from " + held.optString("name", "a panel"));
+            c.put("rev", c.optLong("rev") + 1);
+        }
+        s.put("sockets", new JSONObject());
+    }
+
+    /** A live trade between one of your characters and another (see start_trade in server.py). Call holding lock. */
+    private JSONObject startTrade(JSONObject body, String token) throws ApiError, JSONException {
+        JSONObject a = characters.optJSONObject(body.optString("from", "")), b = characters.optJSONObject(body.optString("with", ""));
+        if (a == null || !a.optString("owner").equals(token)) throw new ApiError(403, "You can only trade from your own character.");
+        if (b == null || b == a) throw new ApiError(400, "Pick someone else to trade with.");
+        JSONObject r = new JSONObject();
+        int mine = 0;
+        for (int i = 0; i < shares.length(); i++) {
+            JSONObject x = shares.getJSONObject(i);
+            if (x.optString("by").equals(token)) mine++;
+            if (x.optString("kind").equals("trade")) {
+                String f = x.optString("from"), w = x.optString("with"), ai = a.optString("id"), bi = b.optString("id");
+                if ((f.equals(ai) && w.equals(bi)) || (f.equals(bi) && w.equals(ai))) { r.put("id", x.optString("id")); return r; }
+            }
+        }
+        if (shares.length() >= 200 || mine >= SHARES_PER_DEVICE) throw new ApiError(429, "You're sharing too much: end something first");
+        JSONObject s = new JSONObject();
+        s.put("id", newId("s"));
+        s.put("kind", "trade");
+        s.put("by", token);
+        s.put("from", a.getString("id"));
+        s.put("fromName", a.optString("name"));
+        s.put("with", b.getString("id"));
+        s.put("withName", b.optString("name"));
+        s.put("to", new JSONArray().put(b.getString("id")));
+        s.put("gm", false);
+        s.put("seen", new JSONArray());
+        s.put("at", System.currentTimeMillis());
+        JSONObject sides = new JSONObject();
+        sides.put(a.getString("id"), emptySide());
+        sides.put(b.getString("id"), emptySide());
+        s.put("sides", sides);
+        s.put("agreed", new JSONArray());
+        s.put("reason", JSONObject.NULL);
+        shares.put(s);
+        changed(true);
+        r.put("id", s.getString("id"));
+        return r;
+    }
+
+    private static JSONObject emptySide() throws JSONException {
+        JSONObject o = new JSONObject();
+        o.put("items", new JSONArray());
+        o.put("coins", new JSONObject());
+        o.put("asks", new JSONArray());
+        o.put("note", "");
+        return o;
+    }
+
+    /** A side as the history keeps it: items' uid, qty and name, and coins. */
+    private static JSONObject historySide(JSONObject side) throws JSONException {
+        JSONArray items = new JSONArray(), in = side.getJSONArray("items");
+        for (int i = 0; i < in.length(); i++) {
+            JSONObject it = in.getJSONObject(i), o = new JSONObject();
+            o.put("uid", it.optString("uid"));
+            o.put("qty", it.optInt("qty"));
+            o.put("name", it.optString("name"));
+            items.put(o);
+        }
+        JSONObject out = new JSONObject();
+        out.put("items", items);
+        out.put("coins", side.getJSONObject("coins"));
+        return out;
+    }
+
+    private JSONObject tradeHistory(JSONObject s, String status, String reason) throws JSONException {
+        JSONObject sides = s.getJSONObject("sides"), sa = sides.getJSONObject(s.getString("from")), sb = sides.getJSONObject(s.getString("with"));
+        JSONObject t = new JSONObject();
+        t.put("id", s.getString("id"));
+        t.put("from", s.getString("from"));
+        t.put("to", s.getString("with"));
+        t.put("fromName", s.optString("fromName"));
+        t.put("toName", s.optString("withName"));
+        t.put("give", historySide(sa));
+        t.put("ask", historySide(sb));
+        String na = sa.optString("note", ""), nb = sb.optString("note", "");
+        t.put("note", na.isEmpty() ? nb : nb.isEmpty() ? na : na + " / " + nb);
+        t.put("status", status);
+        t.put("created", s.optLong("at") / 1000.0);
+        t.put("resolved", System.currentTimeMillis() / 1000.0);
+        if (reason != null) t.put("reason", reason);
+        return t;
+    }
+
+    /** A finished trade (made, or walked away from) goes into the history, newest first (record_trade). */
+    private void addTradeHistory(JSONObject t) throws JSONException {
+        JSONArray next = new JSONArray();
+        next.put(t);
+        for (int i = 0; i < trades.length() && next.length() < KEEP_RESOLVED_TRADES; i++) next.put(trades.get(i));
+        trades = next;
+    }
+
+    /** A character leaves (or is removed): their live trades end, for the other side too (end_trades_with). */
+    private void endTradesWith(String cid, String reason) throws JSONException {
+        for (int i = shares.length() - 1; i >= 0; i--) {
+            JSONObject s = shares.getJSONObject(i);
+            if (s.optString("kind").equals("trade") && (cid.equals(s.optString("from")) || cid.equals(s.optString("with")))) {
+                addTradeHistory(tradeHistory(s, "cancelled", reason));
+                shares.remove(i);
+            }
+        }
+    }
+
+    /** A trade's calls: a side, agreeing, walking away (see trade_share in server.py). Call holding lock. */
+    private JSONObject tradeShare(JSONObject s, int at, String method, String action, JSONObject body, String token, boolean isGm)
+            throws ApiError, JSONException, TradeError {
+        JSONObject a = characters.optJSONObject(s.getString("from")), b = characters.optJSONObject(s.getString("with"));
+        JSONObject r = new JSONObject();
+        if (method.equals("DELETE")) {
+            String who = a != null && a.optString("owner").equals(token) ? a.optString("name") : b != null && b.optString("owner").equals(token) ? b.optString("name") : null;
+            if (who == null && !isGm) throw new ApiError(403, "Not your trade");
+            JSONObject t = tradeHistory(s, "cancelled", (who == null ? "The GM" : who) + " walked away");
+            addTradeHistory(t);
+            shares.remove(at);
+            changed(true);
+            r.put("ok", true);
+            return r;
+        }
+        String cid = body.optString("character", "");
+        JSONObject me = characters.optJSONObject(cid);
+        if (me == null || !me.optString("owner").equals(token) || !(cid.equals(s.getString("from")) || cid.equals(s.getString("with")))) throw new ApiError(403, "Not your trade");
+        JSONObject other = cid.equals(s.getString("from")) ? b : a;
+        JSONObject sides = s.getJSONObject("sides");
+        if ("side".equals(action)) {
+            JSONObject in = new JSONObject();
+            in.put("items", body.optJSONArray("items") != null ? body.getJSONArray("items") : new JSONArray());
+            in.put("coins", body.optJSONObject("coins") != null ? body.getJSONObject("coins") : new JSONObject());
+            JSONObject side = cleanSide(me, in);
+            checkSide(me, side);
+            JSONArray items = side.getJSONArray("items");
+            for (int i = 0; i < items.length(); i++) {
+                JSONObject it = items.getJSONObject(i), e = findEntry(me, it.getString("uid"));
+                JSONObject entry = new JSONObject(e.toString()), item = entry.getJSONObject("item");
+                item.remove("layers");
+                item.remove("triggers");
+                it.put("entry", entry);
+                it.put("inside", descendants(me, it.getString("uid")).size());
+            }
+            JSONArray asks = new JSONArray(), want = body.optJSONArray("asks");
+            for (int i = 0; want != null && i < want.length() && i < 50; i++) {
+                JSONObject x = want.optJSONObject(i);
+                JSONObject e = x == null || other == null ? null : findEntry(other, x.optString("uid"));
+                if (e == null) continue;
+                JSONObject ask = new JSONObject();
+                ask.put("uid", e.getString("uid"));
+                ask.put("qty", Math.max(1, Math.min(Math.max(1, e.optInt("qty", 1)), Math.max(1, intOf(x.opt("qty"))))));
+                String custom = e.isNull("customName") ? "" : e.optString("customName").trim();
+                ask.put("name", custom.isEmpty() ? e.getJSONObject("item").optString("name") : custom);
+                asks.put(ask);
+            }
+            String note = body.optString("note", "");
+            side.put("asks", asks);
+            side.put("note", note.length() > 300 ? note.substring(0, 300) : note);
+            sides.put(cid, side);
+            if (s.toString().length() > SHARE_MAX_BYTES) throw new ApiError(413, "That's too much for one trade");
+            s.put("agreed", new JSONArray());
+            s.put("reason", JSONObject.NULL);
+            changed(true);
+            r.put("ok", true);
+            return r;
+        }
+        if ("agree".equals(action)) {
+            JSONArray agreed = s.getJSONArray("agreed"), next = new JSONArray();
+            for (int i = 0; i < agreed.length(); i++) if (!agreed.optString(i).equals(cid)) next.put(agreed.optString(i));
+            if (!body.optBoolean("agree")) {
+                s.put("agreed", next);
+                changed(true);
+                r.put("ok", true);
+                return r;
+            }
+            JSONObject sa = sides.getJSONObject(s.getString("from")), sb = sides.getJSONObject(s.getString("with"));
+            if (sa.getJSONArray("items").length() == 0 && sa.getJSONObject("coins").length() == 0 && sb.getJSONArray("items").length() == 0 && sb.getJSONObject("coins").length() == 0)
+                throw new ApiError(400, "Put something in first");
+            next.put(cid);
+            s.put("agreed", next);
+            boolean both = false, hasA = false, hasB = false;
+            for (int i = 0; i < next.length(); i++) { hasA |= next.optString(i).equals(s.getString("from")); hasB |= next.optString(i).equals(s.getString("with")); }
+            both = hasA && hasB;
+            if (both) {
+                JSONObject t = tradeHistory(s, "accepted", null);
+                try {
+                    execute(t);
+                } catch (TradeError e) {
+                    s.put("agreed", new JSONArray());
+                    s.put("reason", e.getMessage());
+                    changed(true);
+                    throw e;
+                }
+                addTradeHistory(t);
+                shares.remove(at);
+                changed(true);
+                r.put("ok", true);
+                r.put("done", true);
+                return r;
+            }
+            changed(true);
+            r.put("ok", true);
+            return r;
+        }
+        throw new ApiError(404, "Unknown endpoint");
     }
 
     private JSONObject discardApi(Request req, List<String> parts, String token) throws ApiError, JSONException {
@@ -1795,7 +2211,10 @@ public class PartyServer {
         }
     }
 
-    private void transfer(JSONObject src, JSONObject dst, String uid, int qty) throws JSONException {
+    private void transfer(JSONObject src, JSONObject dst, String uid, int qty) throws JSONException { transfer(src, dst, uid, qty, "in a trade"); }
+
+    /** how: what the item's history says ("From Pip, in a trade"). */
+    private void transfer(JSONObject src, JSONObject dst, String uid, int qty, String how) throws JSONException {
         JSONObject e = findEntry(src, uid);
         if (qty >= e.optInt("qty")) {
             List<JSONObject> kids = descendants(src, uid);
@@ -1810,7 +2229,7 @@ public class PartyServer {
             src.put("items", keep);
             carryValues(src, dst, moving, null);
             makeLoose(e);
-            addHistory(e, "From " + src.optString("name", "someone") + ", in a trade");
+            addHistory(e, "From " + src.optString("name", "someone") + ", " + how);
             for (JSONObject k : kids) {
                 k.put("equipped", false);
                 k.put("states", new JSONObject());
@@ -1823,7 +2242,7 @@ public class PartyServer {
             e.put("qty", e.optInt("qty") - qty);
             JSONObject part = new JSONObject(e.toString());
             makeLoose(part);
-            addHistory(part, "From " + src.optString("name", "someone") + ", in a trade");
+            addHistory(part, "From " + src.optString("name", "someone") + ", " + how);
             part.put("uid", newId(""));
             part.put("qty", qty);
             carryValues(src, dst, Collections.singletonList(uid), part.optString("uid"));
@@ -1857,20 +2276,6 @@ public class PartyServer {
         moveCoins(b, a, ask.getJSONObject("coins"));
         a.put("rev", a.optLong("rev") + 1);
         b.put("rev", b.optLong("rev") + 1);
-    }
-
-    private void resolve(JSONObject trade, String status, String reason) throws JSONException {
-        trade.put("status", status);
-        trade.put("resolved", System.currentTimeMillis() / 1000.0);
-        if (reason != null) trade.put("reason", reason);
-        JSONArray pending = new JSONArray();
-        List<JSONObject> done = new ArrayList<>();
-        for (int i = 0; i < trades.length(); i++) {
-            JSONObject t = trades.getJSONObject(i);
-            if ("pending".equals(t.optString("status"))) pending.put(t); else done.add(t);
-        }
-        for (int i = Math.max(0, done.size() - KEEP_RESOLVED_TRADES); i < done.size(); i++) pending.put(done.get(i));
-        trades = pending;
     }
 
     // ------------------------------------------------------------------ HTTP
@@ -2164,7 +2569,7 @@ public class PartyServer {
         if (p0.equals("shops")) return shopsApi(req, parts.subList(1, parts.size()), token);
         if (p0.equals("gm")) return gmApi(req, parts.subList(1, parts.size()), token);
         if (p0.equals("treasure")) return treasureApi(req, parts.subList(1, parts.size()), token);
-        if (p0.equals("show")) return showApi(req, parts.subList(1, parts.size()), token);
+        if (p0.equals("share")) return shareApi(req, parts.subList(1, parts.size()), token);
         if (p0.equals("discard")) return discardApi(req, parts.subList(1, parts.size()), token);
         if (p0.equals("presence") || p0.equals("host") || p0.equals("quit")) {
             if (!req.fromApp) throw new ApiError(403, "Only the app on the hosting device can do that");
@@ -2218,6 +2623,13 @@ public class PartyServer {
                     leaving.add(token);
                     lock.notifyAll();
                 }
+                // What they shared ends with them.
+                JSONArray keep = new JSONArray();
+                for (int i = 0; i < shares.length(); i++) {
+                    if (!shares.getJSONObject(i).optString("by").equals(token)) keep.put(shares.getJSONObject(i));
+                    else returnSocketItems(shares.getJSONObject(i));
+                }
+                if (keep.length() != shares.length()) { shares = keep; changed(true); }
             }
             JSONObject r = new JSONObject();
             r.put("ok", true);
@@ -2269,13 +2681,7 @@ public class PartyServer {
                     }
                     String id = c.getString("id");
                     characters.remove(id);
-                    for (int i = 0; i < trades.length(); i++) {
-                        JSONObject t = trades.getJSONObject(i);
-                        if ("pending".equals(t.optString("status")) && (id.equals(t.optString("from")) || id.equals(t.optString("to")))) {
-                            resolve(t, "cancelled", c.optString("name") + " was removed from the party.");
-                            i = -1; // resolve() rebuilt the list
-                        }
-                    }
+                    endTradesWith(id, c.optString("name") + " was removed from the party.");
                     changed(true);
                     JSONObject r = new JSONObject();
                     r.put("ok", true);
@@ -2302,13 +2708,7 @@ public class PartyServer {
                 if (m.equals("DELETE") && parts.size() == 2) {
                     String id = c.getString("id");
                     characters.remove(id);
-                    for (int i = 0; i < trades.length(); i++) {
-                        JSONObject t = trades.getJSONObject(i);
-                        if ("pending".equals(t.optString("status")) && (id.equals(t.optString("from")) || id.equals(t.optString("to")))) {
-                            resolve(t, "cancelled", c.optString("name") + " left the party.");
-                            i = -1; // resolve() rebuilt the list
-                        }
-                    }
+                    endTradesWith(id, c.optString("name") + " left the party.");
                     changed(true);
                     JSONObject r = new JSONObject();
                     r.put("ok", true);
@@ -2317,75 +2717,6 @@ public class PartyServer {
             }
         }
 
-        if (p0.equals("trades")) {
-            JSONObject body = m.equals("POST") ? req.json() : new JSONObject();
-            synchronized (lock) {
-                if (m.equals("POST") && parts.size() == 1) {
-                    JSONObject a = characters.optJSONObject(body.optString("from"));
-                    JSONObject b = characters.optJSONObject(body.optString("to"));
-                    if (a == null || !a.optString("owner").equals(token)) throw new ApiError(403, "You can only trade from your own character.");
-                    if (b == null || b == a) throw new ApiError(400, "Pick someone else to trade with.");
-                    JSONObject give = cleanSide(a, body.optJSONObject("give"));
-                    JSONObject ask = cleanSide(b, body.optJSONObject("ask"));
-                    if (give.getJSONArray("items").length() == 0 && give.getJSONObject("coins").length() == 0
-                            && ask.getJSONArray("items").length() == 0 && ask.getJSONObject("coins").length() == 0) {
-                        throw new ApiError(400, "The offer is empty.");
-                    }
-                    checkSide(a, give);
-                    JSONObject trade = new JSONObject();
-                    trade.put("id", newId("t"));
-                    trade.put("from", a.getString("id"));
-                    trade.put("to", b.getString("id"));
-                    trade.put("fromName", a.optString("name"));
-                    trade.put("toName", b.optString("name"));
-                    trade.put("give", give);
-                    trade.put("ask", ask);
-                    String note = body.optString("note", "");
-                    trade.put("note", note.length() > 500 ? note.substring(0, 500) : note);
-                    trade.put("status", "pending");
-                    trade.put("created", System.currentTimeMillis() / 1000.0);
-                    JSONArray next = new JSONArray();
-                    next.put(trade);
-                    for (int i = 0; i < trades.length(); i++) next.put(trades.get(i));
-                    trades = next;
-                    changed(true);
-                    JSONObject r = new JSONObject();
-                    r.put("id", trade.getString("id"));
-                    return r;
-                }
-                JSONObject trade = null;
-                if (parts.size() == 3) {
-                    for (int i = 0; i < trades.length(); i++) {
-                        if (trades.getJSONObject(i).optString("id").equals(parts.get(1))) trade = trades.getJSONObject(i);
-                    }
-                }
-                if (trade == null || !m.equals("POST")) throw new ApiError(404, "No such trade");
-                if (!"pending".equals(trade.optString("status"))) throw new ApiError(409, "That trade is already closed.");
-                String action = parts.get(2);
-                String side = action.equals("cancel") ? "from" : "to";
-                JSONObject sideChar = characters.optJSONObject(trade.optString(side));
-                String owner = sideChar == null ? null : sideChar.optString("owner");
-                if (!token.equals(owner) || !Arrays.asList("accept", "decline", "cancel").contains(action)) {
-                    throw new ApiError(403, "Not your trade to " + action);
-                }
-                if (action.equals("accept")) {
-                    try {
-                        execute(trade);
-                    } catch (TradeError e) {
-                        resolve(trade, "failed", e.getMessage());
-                        changed(true);
-                        throw e;
-                    }
-                    resolve(trade, "accepted", null);
-                } else {
-                    resolve(trade, action.equals("decline") ? "declined" : "cancelled", null);
-                }
-                changed(true);
-                JSONObject r = new JSONObject();
-                r.put("ok", true);
-                return r;
-            }
-        }
         throw new ApiError(404, "Unknown endpoint");
     }
 

@@ -367,10 +367,11 @@ function runLevelRules({ ctx, id }) {
 // A GM panel's control was used: the rule book's rules for it ("A control is used", applying to its
 // panel or to it; the most specific for each event), here, as the GM (so they can set Global values
 // and open shops). value: its value after the change; signal: a picture's hotspot (rules naming no
-// hotspot run for any).
-function controlUsed(panelId, controlId, value, signal = "") {
+// hotspot run for any); socket: { item, has } for a socket (its item: see socketItemFacts).
+function controlUsed(panelId, controlId, value, signal = "", socket = null) {
   if (!clockworkOn() || !isGmDevice() || !panelId) return;
-  const ctx = { by: "gm", panel: panelId, control: controlId, controlValue: typeof value === "number" ? value : undefined };
+  const ctx = { by: "gm", panel: panelId, control: controlId, controlValue: typeof value === "number" ? value : undefined,
+    ...(socket ? { controlItem: socket.item, socketHas: socket.has } : {}) };
   const rules = clockwork.rulesFor(ctx, ruleKey).map(x => x.rule).filter(r => r.when === "control" && (!r.signal || r.signal === signal));
   if (!rules.length) return;
   const messages = rules.flatMap(r => fireRule(ctx, r));
@@ -524,14 +525,30 @@ function addressLabel(address) {
   if (/^char\.local\./.test(address)) return `the character's ${m[2]}`;
   if (/^local\./.test(address)) return m[2];
   return { "item.charges": "Charges", "item.qty": "How many", "item.equipped": "Equipped", "item.fill": "How full", "item.worth": "Worth",
-    "item.weight": "Weight", "char.carried": "Weight carried" }[address] || address;
+    "item.weight": "Weight", "char.carried": "Weight carried", "control.value": "its value", "control.item.weight": "the item's weight",
+    "control.item.worth": "the item's worth", "control.item.qty": "how many of it" }[address] || address;
 }
 // On-or-off values (states, equipped) read as on / off; the rest as compared.
-const isOnOff = c => (/^item\.state\./.test(c.value) || c.value === "item.equipped") && (c.op === "=" || c.op === "!=");
+const isOnOff = c => (/^item\.state\./.test(c.value) || c.value === "item.equipped" || c.value === "control.has" || /^control\.item\.is\./.test(c.value)) && (c.op === "=" || c.op === "!=");
 const onOffWords = c => {
   const on = !!ruleNumber({}, c.to) === (c.op === "=");
+  if (c.value === "control.has") return on ? "it holds something" : "it's empty";
+  if (/^control\.item\.is\./.test(c.value)) return `the item ${on ? "is" : "isn't"} ${socketItemName(c.value.slice(16))}`;
   return c.value === "item.equipped" ? (on ? "it's equipped" : "it isn't equipped") : `${addressLabel(c.value)} is ${on ? "on" : "off"}`;
 };
+// What "control.item.is.<key>" names: a catalog item, or any of a template.
+function socketItemName(key) {
+  const tpl = /^template:(.+)$/.exec(key);
+  if (tpl) { const t = templateById(tpl[1]); return t ? `any ${templatePlural(t).toLowerCase()}` : "of that kind"; }
+  return store.findItem(key)?.name || "that item";
+}
+// A socket's item as rules read it (control.item.*): from its entry and what's inside it.
+function socketItemFacts(entry, contents = []) {
+  if (!entry) return null;
+  const holder = { items: [entry, ...(contents || [])] };
+  return { weight: Math.round(entryTotalWeight(holder, entry) * 1000) / 1000, worth: entryTotalValue(holder, entry), qty: entry.qty || 1,
+    ids: [entry.srcId, entry.item?.id].filter(Boolean), templates: templateLineage(itemTemplate(entry.item)).map(t => t.id) };
+}
 const ruleCondWords = c => isOnOff(c) ? onOffWords(c)
   : `${addressLabel(c.value)} ${RULE_OPS.find(o => o[0] === c.op)?.[1] || c.op} ${c.to}` + (c.op === "between" ? ` and ${c.to2}` : "");
 // How a condition turning true reads: "Charges reach 0", "heat reaches 5".

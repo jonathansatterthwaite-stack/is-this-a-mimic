@@ -219,11 +219,25 @@ const pillInput = (label, value, onSet, attrs = {}) => h("input", { type: "text"
 
 // One condition as pills, edited in place: the value, how it's compared, with what (a rule's When
 // and If, a control's Shown when and Locked when).
-const condPills = (c, redraw, label = "Condition") => [
+// The catalog's items for a picker, by name: [[id, name]].
+const catalogItemOptions = () => store.catalog().filter(i => i.name).sort((a, b) => a.name.localeCompare(b.name)).map(i => [i.id, i.name]);
+const condPills = (c, redraw, label = "Condition") => /^control\.item\.is\./.test(c.value) || c.value === "control.has" ? socketCondPills(c, redraw) : [
   addressInput(c.value, v => { c.value = v; redraw(); }, false, `${label}: which value`).map(asPill),
   pillSelect("Compared how", RULE_OPS.map(([op, w]) => [op, w]), c.op, v => { c.op = v; redraw(); }),
   pillInput("To", c.to, v => { c.to = ruleTo(v); redraw(); }, { placeholder: "1, on, a choice or a formula" }),
   c.op === "between" && pillInput("And", c.to2, v => { c.to2 = ruleTo(v); redraw(); }, { placeholder: "and" })];
+
+// A socket's conditions as words: "it holds something" / "it's empty"; "the item is / isn't" an item
+// (or any of a template).
+function socketCondPills(c, redraw) {
+  const on = !!ruleNumber({}, c.to) === (c.op === "=");
+  const setOn = v => { c.op = "="; c.to = v ? 1 : 0; redraw(); };
+  if (c.value === "control.has") return [pillSelect("Holds", [[1, "it holds something"], [0, "it's empty"]], on ? 1 : 0, v => setOn(+v))];
+  return [h("span", null, "the item"), pillSelect("Is or isn't", [[1, "is"], [0, "isn't"]], on ? 1 : 0, v => setOn(+v)),
+    pillSelect("Which item", [{ group: "Of a kind", options: treeTemplates({ ghosts: false }).map(t => ["template:" + t.id, `any ${templatePlural(t).toLowerCase()}`]) },
+      { group: "Items", options: catalogItemOptions() }],
+      c.value.slice(16), v => { c.value = "control.item.is." + v; redraw(); })];
+}
 
 // The blocks of one rule, edited in place. opts: { onChange (redraw), book (a rule-book rule: its
 // scope is free, and what it overrides shows), self ("item" | "template": a rule an item or a
@@ -304,7 +318,7 @@ function ruleBlocks(r, opts = {}) {
   const chars = [...new Map([...gmChars(), ...store.state.characters].map(c => [c.id, c])).values()];
   const partOptions = part => part === "character" ? chars.map(c => [c.id, c.name])
     : part === "item" ? [{ group: "Templates", options: treeTemplates({ ghosts: false }).map(t => ["template:" + t.id, `All ${templatePlural(t).toLowerCase()}`]) },
-        { group: "Items", options: store.catalog().filter(i => i.name).sort((a, b) => a.name.localeCompare(b.name)).map(i => [i.id, i.name]) }]
+        { group: "Items", options: catalogItemOptions() }]
     : part === "drawing" ? drawingLibrary().map(d => [d.id, d.name || "Untitled drawing"])
     : part === "panel" ? gmControls().filter(p => p.kind === "panel" || p.controls).map(p => [p.id, p.name || "Untitled panel"])
     : part === "control" ? (gmControls().find(p => p.id === scope.panel)?.controls || []).filter(c => c.type !== "tabs").map(c => [c.id, controlName(c)]) : [];
@@ -345,6 +359,10 @@ function ruleBlocks(r, opts = {}) {
         actionStarters().map(s => chip("when", s.label, () => { Object.assign(r, clone(s.rule)); delete r.test; delete r.every; })))],
       h("h4", null, "If"), h("div", { class: "rule-palette-row" },
         chip("if", "a value is…", () => { (r.if ||= []).push(firstCond(level)); }),
+        level === "control" && [
+          chip("if", "it holds something", () => { (r.if ||= []).push({ value: "control.has", op: "=", to: 1 }); }),
+          chip("if", "the item is…", () => { (r.if ||= []).push({ value: "control.item.is." + (store.catalog()[0]?.id || "x"), op: "=", to: 1 }); }),
+          chip("if", "the item weighs…", () => { (r.if ||= []).push({ value: "control.item.weight", op: ">=", to: 5 }); })],
         level === "item" && chip("if", "a state is on", () => { (r.if ||= []).push({ value: firstStateAddr(), op: "=", to: 1 }); }),
         level === "item" && chip("if", "it's equipped", () => { (r.if ||= []).push({ value: "item.equipped", op: "=", to: 1 }); })),
       h("h4", null, "Do"), h("div", { class: "rule-palette-row" },

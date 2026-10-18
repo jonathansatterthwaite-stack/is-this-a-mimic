@@ -52,15 +52,18 @@ function pinValues(pin) {
 // drives what), Players (in a party: gmPlayersView), Treasure. Preparing outside a party, values
 // are the campaign's starting ones.
 
-const GM_TABS = [["controls", "Controls"], ["players", "Players"], ["treasure", "Treasure"]];
+// (Treasure is in the Items tab: js/app.js, itemsTabs.)
+const GM_TABS = [["controls", "Controls"], ["players", "Players"]];
+// Controls only while the campaign has rules, values and controls (clockworkOn); Players in a party.
+const gmTabs = () => GM_TABS.filter(([k]) => (party.active || k !== "players") && (clockworkOn() || k !== "controls"));
 
 function renderGm() {
-  // (Controls only while the campaign has rules, values and controls: clockworkOn.)
-  const tabs = GM_TABS.filter(([k]) => (party.active || k !== "players") && (clockworkOn() || k !== "controls"));
+  const tabs = gmTabs();
+  if (!tabs.length) return h("div", { class: "view-gm" }, emptyState("shield", "Nothing here while this campaign's rules, values and controls are off."));
   const tab = tabs.some(([k]) => k === ui.gmTab) ? ui.gmTab : tabs[0][0];
   return h("div", { class: "view-gm view-party" },
-    subTabs("GM", tabs, tab, k => { ui.gmTab = k; render(); }),
-    tab === "players" ? gmPlayersView() : tab === "treasure" ? treasureView() : gmControlsPage());
+    tabs.length > 1 && subTabs("GM", tabs, tab, k => { ui.gmTab = k; render(); }),
+    tab === "players" ? gmPlayersView() : gmControlsPage());
 }
 
 // ------------------------------------------------------------------ the Controls tab
@@ -148,7 +151,7 @@ function pinFace(p) {
 
 // opts: zoom: () => the zoom (expanded only: then it scrolls); key: "panelId/ctlId" (its layers'
 // state on this device); change(fn): change the stored board (a group's members splitting off).
-function gmBoard(board, { zoom = null, key = "", change = null, used = null } = {}) {
+function gmBoard(board, { zoom = null, key = "", change = null, used = null, sendPos: send = sendPos } = {}) {
   const el = h("div", { class: "gm-board" + (board.image ? "" : " blank") });
   const inner = h("div", { class: "gm-board-inner" }, el);
   const box = h("div", { class: "gm-board-fit" + (zoom ? " zoomable" : "") }, inner);
@@ -173,7 +176,7 @@ function gmBoard(board, { zoom = null, key = "", change = null, used = null } = 
   lines.setAttribute("class", "gm-board-lines");
   lines.setAttribute("viewBox", "0 0 100 100");
   lines.setAttribute("preserveAspectRatio", "none");
-  const ctx = { board, key, change, used, lines, groups: new Map() }; // (used: a pin was dropped)
+  const ctx = { board, key, change, used, send, lines, groups: new Map() }; // (used: a pin was dropped; send: how its values are set)
   const pinsOn = layer => (board.pins || []).filter(p => pinLayerOf(board, p) === layer);
   for (const layer of [...layers].reverse()) {
     const st = layerState(key, layer);
@@ -195,7 +198,7 @@ function gmBoard(board, { zoom = null, key = "", change = null, used = null } = 
 
 // A pin, or a group and its members who are apart (each a pin of its own), on a board.
 function boardPin(boardEl, pin, ctx, locked) {
-  if (!isGroup(pin)) return [gmPin(boardEl, pin, { setters: [pin], locked, onMoved: ctx.used })];
+  if (!isGroup(pin)) return [gmPin(boardEl, pin, { setters: [pin], locked, onMoved: ctx.used, send: ctx.send })];
   const members = pinSetters({ pins: [pin] });
   const together = members.filter(m => !m.apart), apart = members.filter(m => m.apart);
   const at = pinPos(together[0] || members[0] || pin);
@@ -206,10 +209,10 @@ function boardPin(boardEl, pin, ctx, locked) {
     return [m.id, l];
   }));
   const setEnd = (l, n, x, y) => { l.setAttribute("x" + n, x * 100); l.setAttribute("y" + n, y * 100); };
-  const group = gmPin(boardEl, pin, { setters: together, locked, count: together.length, at, onMoved: ctx.used,
+  const group = gmPin(boardEl, pin, { setters: together, locked, count: together.length, at, onMoved: ctx.used, send: ctx.send,
     onPlace: (x, y) => lineFor.forEach(l => setEnd(l, 1, x, y)),
     onTap: () => openGroupMenu(pin, ctx) });
-  const loose = apart.map(m => gmPin(boardEl, m, { setters: [m], locked, member: true, onMoved: ctx.used,
+  const loose = apart.map(m => gmPin(boardEl, m, { setters: [m], locked, member: true, onMoved: ctx.used, send: ctx.send,
     onPlace: (x, y) => setEnd(lineFor.get(m.id), 2, x, y),
     // Dropped on its group: back with it (once its own values are sent).
     onDrop: ev => {
@@ -274,7 +277,7 @@ function boardLayersList(board, key, onChange) {
 const pinsOnLayer = (board, layer) => (board.pins || []).filter(p => pinLayerOf(board, p) === layer);
 
 // A board full screen, to zoom and scroll. opts: key and change, as gmBoard's.
-function openBoardZoom(board, title, { key = "", change = null, used = null } = {}) {
+function openBoardZoom(board, title, { key = "", change = null, used = null, sendPos: send = sendPos } = {}) {
   let zoom = 1;
   const holder = h("div", { class: "board-zoom-holder" });
   let view;
@@ -282,7 +285,7 @@ function openBoardZoom(board, title, { key = "", change = null, used = null } = 
   const changeHere = change && (fn => { fn(board); change(fn); setTimeout(redraw, 50); });
   const redraw = () => {
     const keep = view && { l: view.scrollLeft, t: view.scrollTop };
-    view = gmBoard(board, { zoom: () => zoom, key, change: changeHere, used });
+    view = gmBoard(board, { zoom: () => zoom, key, change: changeHere, used, sendPos: send });
     holder.replaceChildren(view);
     wire(view);
     if (keep) setTimeout(() => { view.scrollLeft = keep.l; view.scrollTop = keep.t; });
@@ -366,7 +369,7 @@ function openBoardZoom(board, title, { key = "", change = null, used = null } = 
 // at (where it shows, when not from setters), onTap, onDrop(ev) (let go after a drag: tested at
 // once, while the board is on screen, it may return what to do once the values are sent),
 // onPlace(x, y) (each time it moves), onMoved() (dragged and its values sent), member (a group's member, apart).
-function gmPin(board, pin, { setters = [pin], locked = false, count = null, at = null, onTap = null, onDrop = null, onPlace = null, onMoved = null, member = false } = {}) {
+function gmPin(board, pin, { setters = [pin], locked = false, count = null, at = null, onTap = null, onDrop = null, onPlace = null, onMoved = null, member = false, send: sendTo = sendPos } = {}) {
   const p0 = at || pinPos(setters[0] || pin);
   let { x, y } = p0;
   const picture = pin.look === "picture" && (pin.iconSvg || pin.icon);
@@ -404,7 +407,7 @@ function gmPin(board, pin, { setters = [pin], locked = false, count = null, at =
     clearTimeout(timer);
     timer = null;
     last = Date.now();
-    return sendPos(setters, x, y);
+    return sendTo(setters, x, y);
   };
   const soon = () => { if (!timer) timer = setTimeout(send, Math.max(0, 150 - (Date.now() - last))); };
 

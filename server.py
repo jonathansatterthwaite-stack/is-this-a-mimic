@@ -463,29 +463,57 @@ def clean_treasure_items(raw):
     return items
 
 
-# ------------------------------------------------------------------ showing and discarding
-# A player (or the GM) shows an item to some of the party, and/or the GM: it pops up for them to
-# look at, nothing moves. Gone once all have seen it, or after two hours.
-#   state["shows"]: [{id, by: token, from: charId | "", fromName, item: entry, contents: [entry],
-#     to: [charId], gm: bool, seen: [charId | "gm"], at}]
+# ------------------------------------------------------------------ sharing and discarding
+# Shared screens (docs/gm-puzzles-plan.md): something a device shows to some of the party, and/or
+# the GM. It stays until whoever shared it ends it (or leaves the party; a day at most). Kinds:
+# "item" (an item shown to look at: nothing moves), "trade" (a live trade window between two
+# characters) and "panel" (a GM's panel shown to players, which they use). (Treasure has its own
+# calls, treasure_api.)
+#   state["shares"]: [{id, kind, by: token, from: charId | "", fromName, to: [charId], gm: bool,
+#     seen: [charId | "gm"] (opened at least once), at, + the kind's own:
+#     item: item, contents;
+#     trade: with (the other character), withName, sides: {charId: {items: [{uid, qty, name, entry,
+#       inside}], coins, asks: [{uid, qty, name}] (the other's items asked for), note}}, agreed:
+#       [charId], reason (why it last failed);
+#     panel: panelId, title, panel (the panel as the GM's device has it), uses: [{id, character,
+#       type: "set" | "used", control, name?, value?, signal?, socket? ("put" | "took"), entry?,
+#       contents?, at}] (players' uses, waiting for the GM's device that shared it to make them and
+#       take them off), sockets: {controlId: {id, name, items: [entry], by: charId | "" (the GM's,
+#       there from the start), byName}} (what each socket holds: the host moves items in and out,
+#       as a trade does; ended, what players put in goes back to them)}]
+# A trade is made (execute, as an offer was) once both have agreed; any change to a side clears
+# the agreements. Done or walked away from, it goes into state["trades"] (the history).
 # Discarding an item (in a party, Remove is Discard) sends it to the GM: it waits here until a GM's
 # device takes it into a hoard (Discarded), then deletes it.
 #   state["discards"]: [{id, character, name, items: [entry], at}]
-SHOW_TTL_MS = 2 * 60 * 60 * 1000
+SHARE_TTL_MS = 24 * 60 * 60 * 1000
 # (Kept in memory and in the party's save: a player can't fill them up.)
-SHOW_MAX_BYTES, SHOWS_PER_DEVICE = 300_000, 20
+SHARE_MAX_BYTES, SHARES_PER_DEVICE = 300_000, 20
+PANEL_MAX_BYTES, PANEL_USES_MAX = 2_000_000, 200
 DISCARD_MAX_BYTES, DISCARDS_PER_CHARACTER = 1_000_000, 50
 
 
-def prune_shows():
-    shows = state.get("shows")
-    if shows:
-        cutoff = now_ms() - SHOW_TTL_MS
-        state["shows"] = [s for s in shows if s["at"] > cutoff and not show_seen_by_all(s)]
+def prune_shares():
+    shares = state.get("shares")
+    if shares:
+        cutoff = now_ms() - SHARE_TTL_MS
+        for s in shares:
+            if s["at"] <= cutoff:
+                return_socket_items(s)  # (what players put in a shown panel's sockets isn't lost with it)
+        state["shares"] = [s for s in shares if s["at"] > cutoff]
 
 
-def show_seen_by_all(s):
-    return set(s["to"]) | ({"gm"} if s["gm"] else set()) <= set(s["seen"])
+def return_socket_items(s):
+    """A shown panel ends (ended, its GM gone, or too old): what players put in its sockets goes
+    back to them."""
+    for held in (s.get("sockets") or {}).values():
+        c = state["characters"].get(held.get("by") or "")
+        if not c:
+            continue
+        for e in [x for x in held.get("items") or [] if not x.get("parent")]:
+            transfer(held, c, e["uid"], e["qty"], f"back from {held.get('name') or 'a panel'}")
+        c["rev"] += 1
+    s["sockets"] = {}
 
 
 def snapshot(token, host=False):
@@ -502,8 +530,8 @@ def snapshot(token, host=False):
     snap["treasure"] = [t for t in state.get("treasure", []) if gm_view or mine & set(t["players"])]
     # Items shown: to the devices of those they're shown to (the GM's too, when shown to the GM),
     # and to whoever showed them. Discarded items wait for a GM's device to take them.
-    prune_shows()
-    snap["shows"] = [dict(s, fromMine=s["by"] == token) for s in state.get("shows", [])
+    prune_shares()
+    snap["shares"] = [dict(s, fromMine=s["by"] == token) for s in state.get("shares", [])
                      if mine & set(s["to"]) or (gm_view and s["gm"]) or s["by"] == token]
     if gm_view:
         snap["discards"] = state.get("discards", [])
@@ -887,7 +915,7 @@ def add_history(e, text):
     e["history"] = past + [{"at": now_ms(), "text": str(text)[:160]}]
 
 
-def transfer(src, dst, uid, qty):
+def transfer(src, dst, uid, qty, how="in a trade"):
     e = find_entry(src, uid)
     # Traded items arrive loose and unequipped, with the game system's states (attuned…) off.
     loose = {"parent": None, "equipped": False, "states": {}, "seen": None}
@@ -898,7 +926,7 @@ def transfer(src, dst, uid, qty):
         carry_values(src, dst, moving)
         e.update(loose)
         e.pop("compartment", None)
-        add_history(e, f"From {src.get('name') or 'someone'}, in a trade")
+        add_history(e, f"From {src.get('name') or 'someone'}, {how}")
         for k in kids:
             k["equipped"] = False
             k["states"] = {}
@@ -912,7 +940,7 @@ def transfer(src, dst, uid, qty):
         e["qty"] -= qty
         part = copy.deepcopy(e)
         part.update(loose, uid=new_id(), qty=qty)
-        add_history(part, f"From {src.get('name') or 'someone'}, in a trade")
+        add_history(part, f"From {src.get('name') or 'someone'}, {how}")
         carry_values(src, dst, [uid], part["uid"])
         merge_into(dst, part)
 
@@ -942,14 +970,26 @@ def execute(trade):
     b["rev"] += 1
 
 
-def resolve(trade, status, reason=None):
-    trade["status"] = status
-    trade["resolved"] = time.time()
-    if reason:
-        trade["reason"] = reason
-    pending = [t for t in state["trades"] if t["status"] == "pending"]
-    done = [t for t in state["trades"] if t["status"] != "pending"]
-    state["trades"] = pending + done[-KEEP_RESOLVED_TRADES:]
+def trade_history(s, status, reason=None):
+    """A live trade (a share) as it goes into the history (state["trades"])."""
+    side = lambda cid: s["sides"][cid]
+    return {"id": s["id"], "from": s["from"], "to": s["with"], "fromName": s["fromName"], "toName": s["withName"],
+            "give": {"items": [{k: i[k] for k in ("uid", "qty", "name")} for i in side(s["from"])["items"]], "coins": side(s["from"])["coins"]},
+            "ask": {"items": [{k: i[k] for k in ("uid", "qty", "name")} for i in side(s["with"])["items"]], "coins": side(s["with"])["coins"]},
+            "note": " / ".join(n for n in (side(s["from"]).get("note"), side(s["with"]).get("note")) if n),
+            "status": status, "created": s["at"] / 1000, "resolved": time.time(), **({"reason": reason} if reason else {})}
+
+
+def record_trade(t):
+    """A finished trade (made, or walked away from) goes into the history, newest first."""
+    state["trades"] = [t] + state["trades"][:KEEP_RESOLVED_TRADES - 1]
+
+
+def end_trades_with(cid, reason):
+    """A character leaves (or is removed): their live trades end, for the other side too."""
+    for s in [x for x in state.get("shares", []) if x.get("kind") == "trade" and cid in (x["from"], x["with"])]:
+        record_trade(trade_history(s, "cancelled", reason))
+        state["shares"].remove(s)
 
 
 # ------------------------------------------------------------------ listeners
@@ -1171,8 +1211,8 @@ class Handler(SimpleHTTPRequestHandler):
             return self.gm_api(method, parts[1:], token)
         if parts[:1] == ["treasure"]:
             return self.treasure_api(method, parts[1:], token)
-        if parts[:1] == ["show"]:
-            return self.show_api(method, parts[1:], token)
+        if parts[:1] == ["share"]:
+            return self.share_api(method, parts[1:], token)
         if parts[:1] == ["discard"]:
             return self.discard_api(method, parts[1:], token)
         if parts[:1] == ["local"]:
@@ -1227,6 +1267,13 @@ class Handler(SimpleHTTPRequestHandler):
                 if online.get(token, 0) > 0:
                     leaving.add(token)
                     cond.notify_all()
+                # What they shared ends with them.
+                if any(s["by"] == token for s in state.get("shares", [])):
+                    for s in state["shares"]:
+                        if s["by"] == token:
+                            return_socket_items(s)
+                    state["shares"] = [s for s in state["shares"] if s["by"] != token]
+                    changed()
             return {"ok": True}
 
         if parts[:1] == ["characters"]:
@@ -1262,9 +1309,7 @@ class Handler(SimpleHTTPRequestHandler):
                     if online.get(c["owner"], 0) > 0:
                         raise ApiError(409, f"{c['name']} is connected right now. Players can only be removed while they're away.")
                     del chars[c["id"]]
-                    for t in state["trades"]:
-                        if t["status"] == "pending" and c["id"] in (t["from"], t["to"]):
-                            resolve(t, "cancelled", f"{c['name']} was removed from the party.")
+                    end_trades_with(c["id"], f"{c['name']} was removed from the party.")
                     changed()
                     print(f"  - {c['name']} was removed from the party by the host")
                     return {"ok": True}
@@ -1282,56 +1327,10 @@ class Handler(SimpleHTTPRequestHandler):
                     return {"rev": new["rev"]}
                 if method == "DELETE" and len(parts) == 2:
                     del chars[c["id"]]
-                    for t in state["trades"]:
-                        if t["status"] == "pending" and c["id"] in (t["from"], t["to"]):
-                            resolve(t, "cancelled", f"{c['name']} left the party.")
+                    end_trades_with(c["id"], f"{c['name']} left the party.")
                     changed()
                     print(f"  - {c['name']} left the party")
                     return {"ok": True}
-
-        if parts[:1] == ["trades"]:
-            body = self.body() if method == "POST" else {}
-            with cond:
-                if method == "POST" and len(parts) == 1:
-                    a, b = chars.get(body.get("from")), chars.get(body.get("to"))
-                    if not a or a["owner"] != token:
-                        raise ApiError(403, "You can only trade from your own character.")
-                    if not b or b is a:
-                        raise ApiError(400, "Pick someone else to trade with.")
-                    give, ask = clean_side(a, body.get("give")), clean_side(b, body.get("ask"))
-                    if not (give["items"] or give["coins"] or ask["items"] or ask["coins"]):
-                        raise ApiError(400, "The offer is empty.")
-                    check_side(a, give)
-                    trade = {"id": new_id("t"), "from": a["id"], "to": b["id"], "fromName": a["name"],
-                             "toName": b["name"], "give": give, "ask": ask,
-                             "note": str(body.get("note") or "")[:500], "status": "pending", "created": time.time()}
-                    state["trades"].insert(0, trade)
-                    changed()
-                    print(f"  ? {a['name']} offered a trade to {b['name']}")
-                    return {"id": trade["id"]}
-                trade = next((t for t in state["trades"] if len(parts) == 3 and t["id"] == parts[1]), None)
-                if not trade or method != "POST":
-                    raise ApiError(404, "No such trade")
-                if trade["status"] != "pending":
-                    raise ApiError(409, "That trade is already closed.")
-                action = parts[2]
-                side = "from" if action == "cancel" else "to"
-                owner = chars.get(trade[side], {}).get("owner")
-                if owner != token or action not in ("accept", "decline", "cancel"):
-                    raise ApiError(403, "Not your trade to " + action)
-                if action == "accept":
-                    try:
-                        execute(trade)
-                    except TradeError as e:
-                        resolve(trade, "failed", str(e))
-                        changed()
-                        raise
-                    resolve(trade, "accepted")
-                    print(f"  $ {trade['toName']} accepted a trade from {trade['fromName']}")
-                else:
-                    resolve(trade, "declined" if action == "decline" else "cancelled")
-                changed()
-                return {"ok": True}
 
         raise ApiError(404, "Unknown endpoint")
 
@@ -1760,21 +1759,65 @@ class Handler(SimpleHTTPRequestHandler):
                 return {"ok": True, "status": t["status"]}
             raise ApiError(404, "Unknown endpoint")
 
-    def show_api(self, method, parts, token):
-        """Showing an item (see prune_shows).
+    def share_api(self, method, parts, token):
+        """Shared screens (see prune_shares).
 
-        POST   /api/show {from, item, contents, to: [charId], gm}  show it: from one of your characters
-                                                                 (or, the GM, from "" too)
-        POST   /api/show/<id>/seen {character}                    seen, by one of your characters (or "gm")
-        DELETE /api/show/<id>                                     whoever showed it: take it back
+        POST   /api/share {kind: "item", from, to: [charId], gm, item, contents}
+                                                   share it: from one of your characters (or, the GM,
+                                                   from "" too)
+        POST   /api/share {kind: "trade", from, with} a trade between your character and theirs (one
+                                                   open between two characters: that one again)
+        POST   /api/share/<id>/side {character, items: [{uid, qty}], coins, asks: [{uid, qty}], note}
+                                                   a trade: what your character gives, asks for
+        POST   /api/share/<id>/agree {character, agree} a trade: agree (both: it's made) or not
+        POST   /api/share {kind: "panel", panelId, title, panel, to: [charId]}  a GM: show a panel
+        POST   /api/share/<id>/panel {title, panel}  whoever shared it: the panel as it is now
+        POST   /api/share/<id>/use {character, type: "set" | "used", control, name, value, signal}
+                                                   a player it's shown to uses a control (queued)
+        POST   /api/share/<id>/socket {character, control, uid}   a player puts an item in a socket
+        POST   /api/share/<id>/socket {character, control, take: true}  … takes what's in it (the
+                                                   GM, with no character: back to whoever put it in)
+        DELETE /api/share/<id>/use/<useId>         whoever shared it: made (taken off the queue)
+        POST   /api/share/<id>/seen {character}    opened, by one of your characters (or "gm")
+        DELETE /api/share/<id>                     whoever shared it (or a GM): end it; a trade:
+                                                   either of them walks away
         """
         gm = self.is_gm(token)
         body = self.body() if method == "POST" else {}
         with cond:
-            shows = state.setdefault("shows", [])
+            shows = state.setdefault("shares", [])
             if method == "POST" and not parts:
                 if not party_enabled():
                     raise ApiError(404, "No party is being hosted")
+                kind = body.get("kind", "item")
+                if kind == "trade":
+                    return self.start_trade(shows, body, token)
+                if kind == "panel":
+                    if not gm:
+                        raise ApiError(403, "Only a GM can show a panel")
+                    to = [str(x) for x in (body.get("to") or []) if str(x) in state["characters"]][:30]
+                    if not to:
+                        raise ApiError(400, "Choose who to show it to")
+                    if not isinstance(body.get("panel"), dict):
+                        raise ApiError(400, "Nothing to show")
+                    if len(shows) >= 200 or sum(1 for x in shows if x["by"] == token) >= SHARES_PER_DEVICE:
+                        raise ApiError(429, "You're sharing too much: end something first")
+                    s = {"id": new_id("s"), "kind": "panel", "by": token, "from": "", "fromName": "The GM", "to": to, "gm": False, "seen": [],
+                         "at": now_ms(), "panelId": str(body.get("panelId") or "")[:80], "title": str(body.get("title") or "Panel")[:80],
+                         "panel": body["panel"], "uses": [], "sockets": {}}
+                    for ctl in body["panel"].get("controls") or []:
+                        held = ctl.get("held") if isinstance(ctl, dict) and ctl.get("type") == "socket" else None
+                        items = clean_treasure_items(held) if isinstance(held, list) else []
+                        if items:
+                            s["sockets"][str(ctl.get("id"))] = {"id": f"socket-{s['id']}-{ctl.get('id')}", "name": str(ctl.get("label") or "the socket")[:60],
+                                                               "items": items, "by": "", "byName": "The GM"}
+                    if len(json.dumps(s)) > PANEL_MAX_BYTES:
+                        raise ApiError(413, "That panel is too big to show")
+                    shows.append(s)
+                    changed()
+                    return {"id": s["id"]}
+                if kind != "item":
+                    raise ApiError(400, "Not something that can be shared")
                 frm = str(body.get("from") or "")
                 c = state["characters"].get(frm)
                 if frm and (not c or c["owner"] != token):
@@ -1788,23 +1831,29 @@ class Handler(SimpleHTTPRequestHandler):
                 to_gm = bool(body.get("gm"))
                 if not to and not to_gm:
                     raise ApiError(400, "Choose who to show it to")
-                if len(shows) >= 200 or sum(1 for x in shows if x["by"] == token) >= SHOWS_PER_DEVICE:
-                    raise ApiError(429, "Too much is being shown: try again once it's been seen")
-                s = {"id": new_id("s"), "by": token, "from": frm, "fromName": c["name"] if c else "The GM",
+                if len(shows) >= 200 or sum(1 for x in shows if x["by"] == token) >= SHARES_PER_DEVICE:
+                    raise ApiError(429, "You're sharing too much: end something first")
+                s = {"id": new_id("s"), "kind": "item", "by": token, "from": frm, "fromName": c["name"] if c else "The GM",
                      "item": items[0], "contents": clean_treasure_items(body.get("contents"))[:200], "to": to, "gm": to_gm,
                      "seen": [], "at": now_ms()}
-                if len(json.dumps(s)) > SHOW_MAX_BYTES:
+                if len(json.dumps(s)) > SHARE_MAX_BYTES:
                     raise ApiError(413, "That's too big to show")
                 shows.append(s)
                 changed()
                 return {"id": s["id"]}
             s = next((x for x in shows if parts and x["id"] == parts[0]), None)
             if not s:
-                raise ApiError(404, "That isn't being shown any more")
+                raise ApiError(404, "That isn't being shared any more")
             action = parts[1] if len(parts) > 1 else None
+            if s.get("kind") == "panel" and action in ("panel", "use", "socket"):
+                return self.panel_share(s, method, parts, body, token, gm)
+            if s.get("kind") == "trade" and (action in ("side", "agree") or method == "DELETE"):
+                return self.trade_share(shows, s, method, action, body, token, gm)
             if method == "DELETE" and action is None:
                 if s["by"] != token and not gm:
-                    raise ApiError(403, "Only whoever showed it can take it back")
+                    raise ApiError(403, "Only whoever shared it can end it")
+                if s.get("kind") == "panel":
+                    return_socket_items(s)
                 shows.remove(s)
                 changed()
                 return {"ok": True}
@@ -1819,13 +1868,201 @@ class Handler(SimpleHTTPRequestHandler):
                         raise ApiError(403, "That wasn't shown to you")
                 if who not in s["seen"]:
                     s["seen"].append(who)
-                prune_shows()
                 changed()
                 return {"ok": True}
             raise ApiError(404, "Unknown endpoint")
 
+    def panel_share(self, s, method, parts, body, token, gm):
+        """A shown panel's calls: the GM's updates, players' uses and their being made (see share_api).
+        Call with cond held."""
+        action = parts[1]
+        if action == "panel" and method == "POST":
+            if s["by"] != token:
+                raise ApiError(403, "Only whoever showed it can change it")
+            if not isinstance(body.get("panel"), dict):
+                raise ApiError(400, "Not a panel")
+            before = s["panel"]
+            s["panel"], s["title"] = body["panel"], str(body.get("title") or s["title"])[:80]
+            if len(json.dumps(s)) > PANEL_MAX_BYTES:
+                s["panel"] = before
+                raise ApiError(413, "That panel is too big to show")
+            changed()
+            return {"ok": True}
+        if action == "use" and method == "POST" and len(parts) == 2:
+            cid = str(body.get("character") or "")
+            c = state["characters"].get(cid)
+            if not c or c["owner"] != token or cid not in s["to"]:
+                raise ApiError(403, "That isn't shown to you")
+            kind = body.get("type")
+            if kind not in ("set", "used"):
+                raise ApiError(400, "Not a use")
+            use = {"id": new_id("u"), "character": cid, "type": kind, "control": str(body.get("control") or "")[:80], "at": now_ms()}
+            if kind == "set":
+                if not isinstance(body.get("name"), str) or not isinstance(body.get("value"), (int, float)) or isinstance(body.get("value"), bool):
+                    raise ApiError(400, "Not a value")
+                use["name"], use["value"] = body["name"][:80], body["value"]
+            else:
+                if isinstance(body.get("value"), (int, float)) and not isinstance(body.get("value"), bool):
+                    use["value"] = body["value"]
+                if body.get("signal"):
+                    use["signal"] = str(body["signal"])[:80]
+            uses = s.setdefault("uses", [])
+            uses.append(use)
+            del uses[:-PANEL_USES_MAX]
+            changed()
+            return {"id": use["id"]}
+        if action == "socket" and method == "POST":
+            return self.socket_call(s, body, token, gm)
+        if action == "use" and method == "DELETE" and len(parts) == 3:
+            if s["by"] != token:
+                raise ApiError(403, "Only whoever showed it makes its uses")
+            s["uses"] = [u for u in s.get("uses", []) if u["id"] != parts[2]]
+            changed()
+            return {"ok": True}
+        raise ApiError(404, "Unknown endpoint")
+
+    def socket_call(self, s, body, token, gm):
+        """A socket of a shown panel: an item put in (it leaves the character, as in a trade) or
+        taken out (into the character); either is a use for the GM's device (its rules). Call with
+        cond held."""
+        chars = state["characters"]
+        ctl_id = str(body.get("control") or "")
+        ctl = next((c for c in (s.get("panel") or {}).get("controls") or [] if isinstance(c, dict) and c.get("id") == ctl_id and c.get("type") == "socket"), None)
+        if not ctl:
+            raise ApiError(404, "No such socket")
+        label = str(ctl.get("label") or "the socket")[:60]
+        sockets = s.setdefault("sockets", {})
+        held = sockets.get(ctl_id)
+        cid = str(body.get("character") or "")
+        by_gm = False
+        if body.get("take"):
+            if not held or not held.get("items"):
+                raise ApiError(409, "There's nothing in it")
+            if gm and not cid:
+                cid, by_gm = held.get("by") or "", True
+            c = chars.get(cid)
+            if not c:
+                raise ApiError(400, "Nobody to give it to")
+            if not gm and (c["owner"] != token or cid not in s["to"]):
+                raise ApiError(403, "That isn't shown to you")
+            top = [e for e in held["items"] if not e.get("parent")]
+            what = copy.deepcopy(top[0]) if top else None
+            inside = [copy.deepcopy(e) for e in held["items"] if e.get("parent")]
+            for e in top:
+                transfer(held, c, e["uid"], e["qty"], f"taken from {label}")
+            c["rev"] += 1
+            sockets.pop(ctl_id, None)
+            use = {"socket": "took", **({"byGm": True} if by_gm else {})}
+        else:
+            if held and held.get("items"):
+                raise ApiError(409, "Something's in it already")
+            c = chars.get(cid)
+            if not c or c["owner"] != token or cid not in s["to"]:
+                raise ApiError(403, "That isn't shown to you")
+            e = find_entry(c, str(body.get("uid") or ""))
+            if not e:
+                raise ApiError(404, "You don't have that any more")
+            holder = {"id": f"socket-{s['id']}-{ctl_id}", "name": label, "items": [], "by": cid, "byName": c["name"]}
+            transfer(c, holder, e["uid"], e["qty"], f"put into {label}")
+            c["rev"] += 1
+            sockets[ctl_id] = holder
+            what = copy.deepcopy(next((x for x in holder["items"] if not x.get("parent")), None))
+            inside = [copy.deepcopy(x) for x in holder["items"] if x.get("parent")]
+            use = {"socket": "put"}
+        uses = s.setdefault("uses", [])
+        uses.append({"id": new_id("u"), "character": cid, "type": "used", "control": ctl_id, "at": now_ms(), **use, "entry": what, "contents": inside[:200]})
+        del uses[:-PANEL_USES_MAX]
+        changed()
+        return {"ok": True}
+
+    def start_trade(self, shares, body, token):
+        """A live trade between one of your characters and another (see share_api). Call with cond held."""
+        chars = state["characters"]
+        a, b = chars.get(str(body.get("from") or "")), chars.get(str(body.get("with") or ""))
+        if not a or a["owner"] != token:
+            raise ApiError(403, "You can only trade from your own character.")
+        if not b or b is a:
+            raise ApiError(400, "Pick someone else to trade with.")
+        same = next((x for x in shares if x.get("kind") == "trade" and {x["from"], x["with"]} == {a["id"], b["id"]}), None)
+        if same:
+            return {"id": same["id"]}
+        if len(shares) >= 200 or sum(1 for x in shares if x["by"] == token) >= SHARES_PER_DEVICE:
+            raise ApiError(429, "You're sharing too much: end something first")
+        empty = lambda: {"items": [], "coins": {}, "asks": [], "note": ""}
+        s = {"id": new_id("s"), "kind": "trade", "by": token, "from": a["id"], "fromName": a["name"], "with": b["id"], "withName": b["name"],
+             "to": [b["id"]], "gm": False, "seen": [], "at": now_ms(), "sides": {a["id"]: empty(), b["id"]: empty()},
+             "agreed": [], "reason": None}
+        shares.append(s)
+        changed()
+        print(f"  ? {a['name']} opened a trade with {b['name']}")
+        return {"id": s["id"]}
+
+    def trade_share(self, shares, s, method, action, body, token, gm):
+        """A trade's calls: a side, agreeing, walking away (see share_api). Call with cond held."""
+        chars = state["characters"]
+        a, b = chars.get(s["from"]), chars.get(s["with"])
+        cid = str(body.get("character") or "")
+        mine = [c for c in (a, b) if c and c["owner"] == token]
+        if method == "DELETE":
+            if not mine and not gm:
+                raise ApiError(403, "Not your trade")
+            who = (mine[0]["name"] if mine else "The GM")
+            record_trade(trade_history(s, "cancelled", f"{who} walked away"))
+            shares.remove(s)
+            changed()
+            return {"ok": True}
+        me = chars.get(cid)
+        if not me or me["owner"] != token or cid not in (s["from"], s["with"]):
+            raise ApiError(403, "Not your trade")
+        other = b if cid == s["from"] else a
+        if action == "side":
+            side = clean_side(me, {"items": body.get("items"), "coins": body.get("coins")})
+            check_side(me, side)
+            for it in side["items"]:
+                e = find_entry(me, it["uid"])
+                it["entry"] = dict(e, item={k: v for k, v in e["item"].items() if k not in ("layers", "triggers")})
+                it["inside"] = len(descendants(me, it["uid"]))
+            asks = []
+            for x in (body.get("asks") or [])[:50]:
+                e = other and find_entry(other, str((x or {}).get("uid") or ""))
+                if e:
+                    asks.append({"uid": e["uid"], "qty": max(1, min(int(e.get("qty") or 1), int((x or {}).get("qty") or 1))),
+                                 "name": str(e.get("customName") or "").strip() or e["item"]["name"]})
+            s["sides"][cid] = {"items": side["items"], "coins": side["coins"], "asks": asks, "note": str(body.get("note") or "")[:300]}
+            if len(json.dumps(s)) > SHARE_MAX_BYTES:
+                raise ApiError(413, "That's too much for one trade")
+            s["agreed"], s["reason"] = [], None
+            changed()
+            return {"ok": True}
+        if action == "agree":
+            if not body.get("agree"):
+                s["agreed"] = [x for x in s["agreed"] if x != cid]
+                changed()
+                return {"ok": True}
+            sa, sb = s["sides"][s["from"]], s["sides"][s["with"]]
+            if not (sa["items"] or sa["coins"] or sb["items"] or sb["coins"]):
+                raise ApiError(400, "Put something in first")
+            if cid not in s["agreed"]:
+                s["agreed"].append(cid)
+            if set(s["agreed"]) >= {s["from"], s["with"]}:
+                t = trade_history(s, "accepted")
+                try:
+                    execute(t)
+                except TradeError as e:
+                    s["agreed"], s["reason"] = [], str(e)
+                    changed()
+                    raise
+                record_trade(t)
+                shares.remove(s)
+                print(f"  $ {s['fromName']} and {s['withName']} traded")
+                changed()
+                return {"ok": True, "done": True}
+            changed()
+            return {"ok": True}
+        raise ApiError(404, "Unknown endpoint")
+
     def discard_api(self, method, parts, token):
-        """Discarded items, for the GM (see prune_shows).
+        """Discarded items, for the GM (see prune_shares).
 
         POST   /api/discard {character, items}   one of your characters discards them (already taken out)
         DELETE /api/discard/<id>                  a GM's device has taken them

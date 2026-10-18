@@ -385,7 +385,7 @@ function filesView() {
         fileBtn("download", `Export ${d.name}`, () => download(`${safeName(d.name)}.drawing.json`, fileOf("drawing", { drawing: d }))),
         fileBtn("trash", `Delete ${d.name}`, () => confirmDialog(`Delete the drawing “${d.name}”? Items using it keep their icon.`, "Delete",
           () => commit(s => { s.iconLibrary = s.iconLibrary.filter(x => x.id !== d.id); for (const it of drawingUsers(d.id)) delete it.iconLib; }, `Deleted “${d.name}”`, true)), "danger-hover"),
-      ])), null, "Icons drawn in the icon editor (SVG). Catalog → Drawings edits them."),
+      ])), null, "Icons drawn in the icon editor (SVG). Items → Catalog → Drawings edits them."),
 
     filesSection("Pictures", [picturesBox], null, "Pictures in documents, item images, set pieces and GM control backgrounds.", null),
     dataCard(),

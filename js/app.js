@@ -71,6 +71,7 @@ const ICONS = {
   cog: '<path d="M12 20a8 8 0 1 0 0-16 8 8 0 0 0 0 16Z"/><path d="M12 14a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M12 2v2M12 22v-2M17 20.66l-1-1.73M11 10.27 7 3.34M20.66 17l-1.73-1M3.34 7l1.73 1M14 12h8M2 12h2M20.66 7l-1.73 1M3.34 17l1.73-1M17 3.34l-1 1.73M11 13.73l-4 6.93"/>',
   eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
   "eye-off": '<path d="m3 3 18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 3.9"/><path d="M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
+  star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
   more: '<circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/><circle cx="5" cy="12" r="1.3" fill="currentColor"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   eyeOff: '<path d="M3 3l18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6 0 9.9 6.6 10 7a17 17 0 0 1-3 3.7M6.6 6.6C3.8 8.4 2.1 11.7 2 12c.1.4 4 7 10 7a9.6 9.6 0 0 0 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
@@ -193,12 +194,17 @@ function commit(fn, msg, undoable = false) {
 // dialog's content (an item's icon as a watermark; see iconFocusSwitch).
 // dock: details (an item's): on a wide screen (wideLayout) they open in the panel on the right
 // instead, replacing what's there; dock is then what pops them out as a window (⤢).
+// minimise: its close button is — (a shared screen: it waits in the Shared tray, js/shared.js).
+// onClose: called once it's closed (by its button, another docked in its place, Escape…).
 // Returns close; close.panel is the dialog.
-function openModal(title, body, { wide = false, footer = null, head = null, backdrop = null, dock = null } = {}) {
+function openModal(title, body, { wide = false, footer = null, head = null, backdrop = null, dock = null, minimise = false, onClose = null } = {}) {
   const root = document.getElementById("modal-root");
   const docked = !!dock && wideLayout();
-  let overlay = null;
+  let overlay = null, closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
+    onClose?.();
     if (docked) {
       panel.remove();
       if (dockClose === close) dockClose = null;
@@ -213,7 +219,7 @@ function openModal(title, body, { wide = false, footer = null, head = null, back
     backdrop && h("div", { class: "modal-backdrop", "aria-hidden": "true" }, backdrop),
     h("div", { class: "modal-head" }, h("h2", null, title), head,
       docked && typeof dock === "function" && iconBtn("expand", "Open as a window", () => dock()),
-      iconBtn("x", "Close", () => close())),
+      minimise ? iconBtn("minus", "Minimise (it waits in Shared)", () => close()) : iconBtn("x", "Close", () => close())),
     h("div", { class: "modal-body" }, body),
     footer && h("div", { class: "modal-foot" }, footer));
   close.panel = panel;
@@ -224,6 +230,7 @@ function openModal(title, body, { wide = false, footer = null, head = null, back
     syncDock();
   } else {
     overlay = h("div", { class: "overlay", onmousedown: e => { if (e.target === overlay) close(); } }, panel);
+    overlay.closeModal = close; // (Escape closes it this way, so onClose runs)
     root.append(overlay);
     document.body.classList.add("modal-open");
   }
@@ -256,7 +263,8 @@ window.addEventListener("resize", () => {
 document.addEventListener("keydown", e => {
   if (e.key !== "Escape") return;
   const last = document.getElementById("modal-root").lastElementChild;
-  if (last) { last.remove(); document.body.classList.toggle("modal-open", !!document.getElementById("modal-root").children.length); }
+  if (last?.closeModal) last.closeModal();
+  else if (last) { last.remove(); document.body.classList.toggle("modal-open", !!document.getElementById("modal-root").children.length); }
   else if (dockClose && !e.target.closest?.("input, textarea, select")) dockClose(); // nothing over it: the docked details close
 });
 
@@ -286,7 +294,8 @@ const ui = {
   panelPick: {}, // the player chosen in each Players dropdown ("panelId/dropdownId" -> character id)
   panelTabs: {}, // the tabs chosen in each Tabs control ("panelId/tabsId" -> [tab id per level])
   settingsTab: "settings", // Settings · Campaigns · Files
-  catTab: "items", // Catalog: Items · My items · Drawings · Templates
+  itemsTab: "shops", // the Items tab's sub-tab: "shops", "catalog" or "treasure" (see itemsTabs)
+  catTab: "items", // Catalog: All items · My items · Drawings · Templates
   role: readPref("mimic-role", "player"), // "gm" to prepare GM things outside a party (see isGmDevice)
   mode: readMode(), // "play" or "edit" (see playMode)
 };
@@ -518,8 +527,8 @@ function fitTileNames(box) {
 const VIEWS = {
   inventory: { label: "Inventory", icon: "bag", render: renderInventory,
     top: () => [missingSystemBanner(), foundElsewhereBanner(), notInPartyBanner(), party.active && undecidedBanner()] },
-  catalog: { label: "Catalog", icon: "book", render: renderCatalog, builder: true, side: catalogSide },
-  shops: { label: "Shops", icon: "cart", render: renderShops },
+  // Items: Shops (everyone), Catalog (Edit mode: making items), Treasure (GMs): see itemsTabs.
+  items: { label: "Items", icon: "cart", render: renderItems, side: itemsSide },
   gm: { label: "GM", icon: "shield", render: renderGm, gmOnly: true },
   party: { label: "Party", icon: "users", render: renderParty, partyOnly: true },
   settings: { label: "Settings", icon: "sliders", render: renderSettingsTabs },
@@ -609,11 +618,29 @@ const viewLabel = key => key === "gm" ? term("gm") : VIEWS[key].label;
 
 function viewVisible(key) {
   const v = VIEWS[key];
+  if (!v) return false;
   if (v.partyOnly && !party.active) return false;
   if (v.builder && playMode()) return false;
   if (v.gmOnly && !isGmDevice()) return false;
+  if (key === "gm" && !gmTabs().length) return false; // (nothing in it: a GM outside a party with rules, values and controls off)
   return true;
 }
+
+// ------------------------------------------------------------------ the Items tab
+// Shops, the catalog and treasure in one tab, as sub-tabs: Shops for everyone; Catalog only in
+// Edit mode (Play puts making items away, as before); Treasure only for GMs. The old tabs' names
+// still go there (go("catalog"), go("shops"), go("treasure"), and #catalog / #shops links).
+const ITEMS_ALIASES = { catalog: "catalog", shops: "shops", treasure: "treasure", custom: "catalog" };
+const itemsTabs = () => [["shops", "Shops"], editing() && ["catalog", "Catalog"], isGmDevice() && ["treasure", "Treasure"]].filter(Boolean);
+const itemsTab = () => { const tabs = itemsTabs(); return tabs.some(([k]) => k === ui.itemsTab) ? ui.itemsTab : tabs[0][0]; };
+function renderItems() {
+  const tabs = itemsTabs(), tab = itemsTab();
+  return h("div", { class: "view-items" },
+    tabs.length > 1 && subTabs("Items", tabs, tab, k => { if (k !== ui.itemsTab) dockClose?.(); ui.itemsTab = k; render(); window.scrollTo(0, 0); }),
+    tab === "catalog" ? renderCatalog() : tab === "treasure" ? treasureView() : renderShops());
+}
+// Wide screens: the catalog's side list, while it's the catalog.
+function itemsSide() { return itemsTab() === "catalog" ? catalogSide() : null; } // (a function: VIEWS, above, names it)
 
 // Held while something is being dragged (a GM control's pin), so party updates don't redraw it
 // out from under the pointer; one render follows when it's let go.
@@ -636,7 +663,7 @@ function render() {
     : isGmDevice() && !gmHasCharacters() && ui.view !== "inventory" ? termCap("gameMaster") : char ? char.name : "";
   document.getElementById("campaign-name").textContent = store.campaign().name;
   document.getElementById("nav").hidden = joining;
-  const offers = party.active ? party.incoming().length : 0;
+  const offers = party.active ? sharedList().filter(x => x.kind === "trade" && x.fresh).length : 0; // (trades waiting to be looked at)
   document.querySelectorAll("[data-view]").forEach(b => {
     b.classList.toggle("active", b.dataset.view === ui.view);
     b.hidden = !viewVisible(b.dataset.view);
@@ -649,7 +676,7 @@ function render() {
   const scroll = window.scrollY;
   tileObserver?.disconnect(); // the grids being replaced; new ones observe themselves
   // Above the view: its notices, then the system's panels (they stay loaded: see js/panels.js).
-  setChildren(document.getElementById("view-top"), freshTestBanner(), !joining && treasureBanner(), !joining && VIEWS[ui.view].top?.());
+  setChildren(document.getElementById("view-top"), freshTestBanner(), !joining && VIEWS[ui.view].top?.());
   syncPanels(char, !joining && ui.view === "inventory");
   // Wide screens: the view takes the width, with a column beside it (the inventory's panels above,
   // or the view's own side: the catalog's groups) and the docked details.
@@ -662,7 +689,7 @@ function render() {
   const mainEl = document.querySelector("main");
   mainEl.classList.toggle("wide", wide);
   mainEl.classList.toggle("has-side", wide && (!!side || !document.getElementById("panels").hidden));
-  mainEl.dataset.screen = ui.view;
+  mainEl.dataset.screen = ui.view === "items" ? itemsTab() : ui.view; // (Items: its sub-tab, "catalog", "shops", "treasure")
   syncDock();
   main.replaceChildren(joining ? renderJoin() : VIEWS[ui.view].render());
   // Tiles are laid out now: size them and shrink names to fit (resizes are handled by each grid's observer).
@@ -671,12 +698,14 @@ function render() {
   refreshLiveIcons(); // live icons outside the view (an open item's details) show the new values
   refreshEntryDetails();
   syncTreasure(); // treasure being shown: pops up, redraws, comes back (js/treasure.js)
-  syncShows(); // items shown to this device pop up; a GM's device takes discarded items (js/party-ui.js)
+  syncShared(); // shared screens: the tray, its chips; something new opens (js/shared.js)
   takeDiscards();
   syncClocks(); // values moving over time keep the game tick going (js/clockwork.js)
 }
 
 function go(view) {
+  // (the old tabs' names: their sub-tab of Items)
+  if (ITEMS_ALIASES[view]) { if (ui.view === "items" && ui.itemsTab !== ITEMS_ALIASES[view]) dockClose?.(); ui.itemsTab = ITEMS_ALIASES[view]; view = "items"; }
   if (view !== ui.view) dockClose?.(); // docked details belong to the tab they were opened on
   ui.view = view;
   history.replaceState(null, "", "#" + view);
@@ -1503,7 +1532,8 @@ function entryTags(st, e, it, path) {
     it.visibility === "gm" && isGmDevice() && h("span", { class: "tag gm-only", title: "Players don't see it in their lists" }, "GM only"),
     statesOnFor(st.char, e).map(s => h("span", { class: "tag attuned" }, s.label.toLowerCase())),
     e.charges != null && h("span", { class: "tag" }, `${e.charges}/${it.maxCharges} charges`),
-    path && h("span", { class: "tag" }, path), st.tags?.(e)];
+    path && h("span", { class: "tag" }, path), isAtHand(st.char, e) && !st.atHandStrip && h("span", { class: "tag at-hand-tag", title: "Kept at hand (shared screens show it, to drop it into a socket or a trade)" }, icon("star"), "at hand"),
+    st.tags?.(e)];
 }
 
 // A tile shows the parts its list's tiles show (displayShows): the picture with the name over it,
@@ -2233,6 +2263,7 @@ function openEntry(entryUid, opts = {}) {
     // Its actions: its "used" rules' buttons (js/triggers.js).
     ...itemButtons(char, e).map(b => h("button", { class: "btn", onclick: () => { close(); pressAction(e.uid, b.label); } }, icon(buttonIcon(b.rule)), b.label)),
     party.active && h("button", { class: "btn", onclick: () => { close(); openShowItem(e.uid); } }, icon("eye"), "Show"),
+    party.active && !e.purse && h("button", { class: "btn", onclick: () => { close(); toggleAtHand(e.uid, char.id); } }, icon("star"), isAtHand(char, e) ? "Not at hand" : "Keep at hand"),
     !e.purse && h("button", { class: "btn", onclick: () => { close(); openSell(e.uid); } }, icon("coins"), "Sell"),
     // Player mode: no editing items (a copy can still be renamed with its display name).
     editing() && h("button", { class: "btn", onclick: () => { close(); openItemForm(base, { entryUid: e.uid }); } }, icon("edit"), "Edit"),
@@ -2544,7 +2575,7 @@ function compartmentsField(f, draft) {
 
 // ------------------------------------------------------------------ catalog view
 
-const CATALOG_TABS = [["items", "Items"], ["mine", "My items"], ["drawings", "Drawings"], ["templates", "Templates"]];
+const CATALOG_TABS = [["items", "All items"], ["mine", "My items"], ["drawings", "Drawings"], ["templates", "Templates"]];
 
 function renderCatalog() {
   const tab = CATALOG_TABS.some(([k]) => k === ui.catTab) ? ui.catTab : "items";
@@ -4406,7 +4437,7 @@ const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimi
 
 // ------------------------------------------------------------------ updates
 // The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
-const APP_VERSION = "1.0.8";
+const APP_VERSION = "1.0.9";
 const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
 const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
 const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);
@@ -4900,7 +4931,7 @@ async function boot() {
   document.getElementById("char-switch").addEventListener("click", openCharSwitcher);
   const hash = location.hash.slice(1);
   if (VIEWS[hash]) ui.view = hash;
-  else if (hash === "custom") { ui.view = "catalog"; ui.catTab = "mine"; } // the Custom tab's place before
+  else if (ITEMS_ALIASES[hash]) { ui.view = "items"; ui.itemsTab = ITEMS_ALIASES[hash]; if (hash === "custom") ui.catTab = "mine"; } // (the old tabs' links)
   if (party.active) {
     if (!party.followCampaign()) party.link(); // play the campaign the GM has loaded
     party.connect();

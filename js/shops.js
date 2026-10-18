@@ -46,7 +46,7 @@ const shopStore = {
       } while (this.again);
     })().finally(() => {
       this.inflight = null;
-      if (ui.view === "shops") render();
+      if (ui.view === "items") render();
     });
     return this.inflight;
   },

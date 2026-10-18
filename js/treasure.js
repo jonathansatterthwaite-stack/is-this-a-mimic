@@ -1,5 +1,5 @@
 // Treasure: hoards the GM makes, to give out as loot, and treasure tables to roll them up (the GM
-// tab's Treasure tab). Plan: docs/gm-tools-plan.md (presenting a hoard to players comes next).
+// Items tab's Treasure: a GM's). Plan: docs/gm-tools-plan.md (presenting a hoard to players comes next).
 //
 // A hoard is kept like a character's inventory, so containers, stacks and sets work the same:
 //   store.state.hoards: [{ id, name, notes, coins: { gp: 3, … }, items: [entry] }]
@@ -528,20 +528,13 @@ const myShowings = () => showings().filter(t => t.players.some(id => party.isLin
 let treasurePopup = null; // { id, close, body, char }
 const treasureSeen = new Set(); // showings this device has popped up (or been told the outcome of)
 
-// A banner above the view while there's treasure to pick from.
-function treasureBanner() {
-  const t = myShowings().find(x => x.status === "picking");
-  if (!t || treasurePopup?.id === t.id) return null;
-  return h("div", { class: "banner treasure-banner" }, icon("coins"), h("span", { class: "grow" }, h("b", null, t.name), " — treasure to share"),
-    h("button", { class: "btn primary", onclick: () => openTreasurePopup(t.id) }, "Open"));
-}
-
 // Called on every render: pops up new treasure, redraws the open one, and tells what was received.
 function syncTreasure() {
   reclaimTreasure();
   if (!party.active) return;
   for (const t of myShowings()) {
-    if (t.status === "picking" && !treasureSeen.has(t.id)) { treasureSeen.add(t.id); openTreasurePopup(t.id); }
+    // (opens by itself only where it won't replace what's open or docked: else it waits in the Shared tray)
+    if (t.status === "picking" && !treasureSeen.has(t.id) && sharedMayOpen()) { treasureSeen.add(t.id); openTreasurePopup(t.id); }
     if (t.status === "done" && !treasureSeen.has("done:" + t.id)) {
       treasureSeen.add("done:" + t.id);
       const mine = t.given.filter(g => party.isLinked(g.character));
@@ -557,12 +550,14 @@ function syncTreasure() {
 }
 
 function openTreasurePopup(id) {
+  treasureSeen.add(id); // (opened, by itself or from the tray: it won't open again by itself)
   if (treasurePopup?.id === id && document.contains(treasurePopup.panel)) return;
   const t = showings().find(x => x.id === id);
   if (!t) return;
   const body = h("div", { class: "treasure-pop" });
-  const close = openModal(t.name, body, { wide: true });
-  treasurePopup = { id, close, body, panel: [...document.querySelectorAll("#modal-root .modal")].pop(),
+  // A shared screen (js/shared.js): minimised, it waits in the Shared tray.
+  const close = sharedScreen("treasure:" + id, t.name, body);
+  treasurePopup = { id, close, body, panel: close.panel,
     char: t.players.find(cid => party.isLinked(cid) && cid === store.state.activeId) || t.players.find(cid => party.isLinked(cid)) };
   drawTreasurePopup();
 }
@@ -608,5 +603,5 @@ function drawTreasurePopup() {
     h("div", { class: "inline wrap modal-actions" },
       picking && h("button", { class: "btn" + (ready ? "" : " primary"), onclick: () => treasureCall("POST", `api/treasure/${t.id}/ready`, { character: cid, ready: !ready }) },
         icon(ready ? "undo" : "check"), ready ? "Not ready" : "I'm ready"),
-      h("button", { class: "btn", onclick: () => { pop.close(); treasurePopup = null; render(); } }, picking ? "Later" : "Close")));
+      h("button", { class: "btn", onclick: () => { pop.close(); treasurePopup = null; render(); } }, picking ? "Later (it waits in Shared)" : "Close")));
 }
