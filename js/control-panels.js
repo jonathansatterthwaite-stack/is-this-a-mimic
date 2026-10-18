@@ -75,6 +75,118 @@ function fillWords(ctl, text, specs) {
 // and use goes through the host to the GM's device that showed it, which makes it (as the GM) and
 // runs the control's rules; the player's screen moves at once (a preview, kept until it's made).
 const isSharedPanel = panel => !!panel?.sharedId;
+// As players see it: shown to them, or the GM's preview of that (panel.preview: see openPanelPreview).
+const isPreviewPanel = panel => !!panel?.preview;
+const isPlayerView = panel => isSharedPanel(panel) || isPreviewPanel(panel);
+// ------------------------------------------------------------------ how it looks to players
+// A panel's look (panel.display) and any control's own (ctl.display: only what it changes from the
+// panel's): what players see follows it, as do the preview and the GM's card switched to As players
+// see it (ui.panelAsPlayers); the GM's card otherwise shows everything, to work with. One set of
+// choices at both levels; a few are the panel's alone (panel: true). The panel's own CSS
+// (panel.css) goes on top, kept to the panel (scopedPanelCss).
+const LOOK = [
+  { key: "labels", label: "Labels", help: "a control's name or words" },
+  { key: "values", label: "Values", help: "a slider's number, a Text control's value" },
+  { key: "notes", label: "Notes and hints", help: "the lock badge, a socket's hints and who put something in, the note under a shown panel" },
+  { key: "border", label: "Borders", help: "the line around each control" },
+  { key: "tint", label: "Colour edge and tint", help: "a control's colour: its edge and the tint behind it" },
+  { key: "card", label: "Card behind each control", help: "off: controls sit straight on the panel" },
+  { key: "corners", label: "Corners", choices: [["round", "Rounded"], ["square", "Square"]] },
+  { key: "size", label: "Text size", choices: [["s", "Small"], ["m", "Normal"], ["l", "Large"], ["xl", "Larger"]] },
+  { key: "font", label: "Font", choices: [["app", "The app's"], ["serif", "Serif"], ["plain", "Plain"], ["mono", "Typewriter"], ["hand", "Handwritten"]] },
+  { key: "gap", label: "Gaps between controls", panel: true, choices: [["none", "None"], ["s", "Small"], ["m", "Normal"], ["l", "Large"]] },
+  { key: "frame", label: "Space around the panel", panel: true, help: "the padding around its grid" },
+  { key: "title", label: "Its name on players' screens", panel: true, help: "the title of the window it opens in" },
+];
+const LOOK_DEFAULT = { labels: true, values: true, notes: true, border: true, tint: true, card: true, corners: "round", size: "m", font: "app", gap: "m", frame: true, title: true };
+const panelLook = panel => ({ ...LOOK_DEFAULT, ...(panel?.display || {}) });
+const controlLook = (panel, ctl) => ({ ...panelLook(panel), ...(ctl?.display || {}) });
+// Styled as players see it: shown to them, the preview, or the GM's card switched to it.
+const lookStyled = panel => isPlayerView(panel) || !!ui.panelAsPlayers?.has(panel.id);
+// A look as classes: what differs from the default (lk-no<key>, lk-<key>-<choice>).
+const lookClasses = (look, panelLevel) => LOOK.filter(d => !!d.panel === panelLevel && look[d.key] !== LOOK_DEFAULT[d.key])
+  .map(d => d.choices ? `lk-${d.key}-${look[d.key]}` : `lk-no${d.key}`);
+// A look's choices in an editor: the panel's (set), or a control's (each "As the panel", or its own).
+function lookField(draft, panel = null) {
+  const own = draft.display || {}, base = panel ? panelLook(panel) : LOOK_DEFAULT;
+  const set = (key, v) => { draft.display = { ...(draft.display || {}) }; if (v === undefined) delete draft.display[key]; else draft.display[key] = v; if (!Object.keys(draft.display).length) delete draft.display; };
+  const row = d => {
+    const opts = d.choices || [[true, "Show"], [false, "Hide"]];
+    const word = v => opts.find(o => o[0] === v)?.[1] || "";
+    const choices = panel ? [["", `As the panel (${word(base[d.key]).toLowerCase()})`], ...opts] : opts;
+    const now = panel ? (d.key in own ? own[d.key] : "") : (d.key in own ? own[d.key] : LOOK_DEFAULT[d.key]);
+    return h("label", { class: "field look-row" }, h("span", null, d.label, d.help && h("small", { class: "muted" }, ` (${d.help})`)),
+      h("select", { onchange: e => { const i = e.target.selectedIndex, v = choices[i][0]; set(d.key, v === "" || (!panel && v === LOOK_DEFAULT[d.key]) ? undefined : v); } },
+        choices.map(([v, l]) => h("option", { selected: v === now }, l))));
+  };
+  return h("details", { class: "field look-field" }, h("summary", null, "How players see it"),
+    h("p", { class: "muted small" }, panel ? "This control's own look; anything left As the panel follows the panel's."
+      : "Players, and the preview, see the panel this way. Your own card shows everything to work with, unless you switch it to As players see it (the eye on its card)."),
+    LOOK.filter(d => !panel || !d.panel).map(row));
+}
+
+// A panel's own CSS, kept to it: each rule moved inside the panel ([data-panel-css="<id>"] …; & or
+// :scope at the start means the panel itself), and what could reach outside it taken out: @import
+// and @font-face, links to other places (url() other than data:), fixed or sticky positioning
+// (the panel's box also contains what's left: .cp-wrap[data-panel-css]). Returns { css, dropped }.
+const panelCssCache = new Map();
+function scopedPanelCss(id, text) {
+  const key = id + "\n" + text;
+  if (panelCssCache.has(key)) return panelCssCache.get(key);
+  const root = `[data-panel-css="${id}"]`, dropped = [];
+  let sheet;
+  try { sheet = new CSSStyleSheet(); sheet.replaceSync(text || ""); } catch { return { css: "", dropped: ["the whole thing: it couldn't be read"] }; }
+  if (/@import/i.test(text)) dropped.push("@import");
+  // Selectors split at their own commas (not those inside :is(…), [ … ] or quotes).
+  const split = s => { const out = []; let depth = 0, q = null, cur = "";
+    for (const ch of s) { if (q) { if (ch === q) q = null; } else if (ch === '"' || ch === "'") q = ch; else if ("([".includes(ch)) depth++; else if (")]".includes(ch)) depth--; else if (ch === "," && !depth) { out.push(cur); cur = ""; continue; } cur += ch; }
+    return [...out, cur].map(x => x.trim()).filter(Boolean); };
+  const scope = s => split(s).map(x => /^(&|:scope)/.test(x) ? root + x.replace(/^(&|:scope)/, "") : `${root} ${x}`).join(", ");
+  const safeUrls = v => [...v.matchAll(/url\(\s*(['"]?)(.*?)\1\s*\)/gi)].every(m => /^data:/i.test(m[2]));
+  const decls = style => { const out = [];
+    for (let i = 0; i < style.length; i++) {
+      const p = style[i], v = style.getPropertyValue(p), imp = style.getPropertyPriority(p);
+      if (p === "position" && /fixed|sticky/i.test(v)) { dropped.push(`position: ${v}`); continue; }
+      if (/url\(/i.test(v) && !safeUrls(v)) { dropped.push(`a link to elsewhere (${p})`); continue; }
+      if (/expression\(|javascript:/i.test(v) || /^(behavior|-moz-binding)$/.test(p)) { dropped.push(p); continue; }
+      out.push(`${p}: ${v}${imp ? " !important" : ""}`);
+    }
+    return out.join("; "); };
+  const walk = (rules, top) => [...rules].map(r => {
+    if (r instanceof CSSStyleRule) return `${top ? scope(r.selectorText) : r.selectorText} { ${decls(r.style)}${r.cssRules?.length ? " " + walk(r.cssRules, false) : ""} }`;
+    if (r instanceof CSSMediaRule) return `@media ${r.conditionText} { ${walk(r.cssRules, top)} }`;
+    if (r instanceof CSSSupportsRule) return `@supports ${r.conditionText} { ${walk(r.cssRules, top)} }`;
+    if (r instanceof CSSKeyframesRule) { if (/url\(/i.test(r.cssText) && !safeUrls(r.cssText)) { dropped.push(`@keyframes ${r.name}`); return ""; } return r.cssText; }
+    dropped.push("@" + (/^@([\w-]+)/.exec(r.cssText)?.[1] || "rule"));
+    return "";
+  }).filter(Boolean).join("\n");
+  const out = { css: walk(sheet.cssRules, true), dropped: [...new Set(dropped)] };
+  if (panelCssCache.size > 50) panelCssCache.clear();
+  panelCssCache.set(key, out);
+  return out;
+}
+// Its CSS on the page (once per panel, replaced as it changes).
+function usePanelCss(panel) {
+  const id = "panel-css-" + panel.id, css = panel.css ? scopedPanelCss(panel.id, panel.css).css : "";
+  let el = document.getElementById(id);
+  if (!css) { el?.remove(); return; }
+  if (!el) { el = h("style", { id }); document.head.append(el); }
+  if (el.textContent !== css) el.textContent = css;
+}
+function cssField(draft, id) {
+  const out = h("p", { class: "muted small" });
+  const show = () => { const r = scopedPanelCss(id || "new", draft.css || ""); out.textContent = !draft.css ? "" : r.dropped.length ? `Taken out (it could reach outside the panel): ${r.dropped.join(", ")}.` : "All kept: it applies inside this panel only."; };
+  const box = h("textarea", { class: "css-field", rows: 6, spellcheck: "false", placeholder: ".cp-cell { border-radius: 0; }\n[data-label=\"Ring the bell\"] .cp-btn { font-size: 1.4em; }",
+    value: draft.css || "", oninput: e => { draft.css = e.target.value; show(); } });
+  show();
+  return h("details", { class: "field look-field" }, h("summary", null, "Style (CSS)"),
+    h("p", { class: "muted small" }, "Your own CSS for how players see it (and the preview). It only reaches this panel. Its parts: ",
+      h("code", null, ".cp-cell"), " (each control; ", h("code", null, "[data-label=\"…\"]"), " picks one by its label, ", h("code", null, ".cp-type-slider"), " a kind), ",
+      h("code", null, ".cp-label"), ", ", h("code", null, ".cp-out"), " / ", h("code", null, ".cp-readout"), " (values), ", h("code", null, ".cp-btn"), ", ",
+      h("code", null, ".cp-switch"), ", ", h("code", null, ".cp-socket"), ", ", h("code", null, ".cp-grid"), "; ", h("code", null, "&"), " is the panel itself."),
+    box, out);
+}
+
 // A control used (its rules: "A control is used").
 function panelUsed(panel, ctlId, value, signal = "") {
   if (isSharedPanel(panel)) return sharedPanelUse(panel, { type: "used", control: ctlId, ...(typeof value === "number" ? { value } : {}), ...(signal ? { signal } : {}) });
@@ -411,7 +523,7 @@ function controlLive(ctl, specs, panel) {
   const label = fillWords(ctl, ctl.label, specs) || ctl.name || "";
   // (for whoever is chosen in a Players dropdown: their name after its label)
   const who = ctl.from && ctl.type !== "icon" && ctl.target && gmChars().find(c => c.id === ctl.target)?.name;
-  const caption = label && h("span", { class: "cp-label" }, label, who && h("span", { class: "cp-who" }, ` · ${who}`));
+  const caption = label && h("span", { class: "cp-label" }, label, who && h("span", { class: "cp-who cp-note" }, ` · ${who}`));
   switch (ctl.type) {
     case "slider": {
       const min = ctl.min ?? spec?.min ?? 0, max = ctl.max ?? spec?.max ?? 1, step = ctl.step ?? spec?.step ?? "any";
@@ -444,7 +556,7 @@ function controlLive(ctl, specs, panel) {
       const on = ctl.on ?? 1, off = ctl.off ?? 0, isOn = v === on;
       return h("button", { type: "button", class: "cp-switch" + (isOn ? " on" : "") + (isUpright(ctl) ? " upright" : "") + (ctl.reverse ? " reverse" : ""),
         role: "switch", "aria-checked": String(isOn),
-        onclick: () => usedAfter(sendControl(ctl, isOn ? off : on, panel), panel, ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), h("span", null, label));
+        onclick: () => usedAfter(sendControl(ctl, isOn ? off : on, panel), panel, ctl, isOn ? off : on) }, h("span", { class: "cp-knob" }), label && h("span", { class: "cp-text" }, label));
     }
     case "button": {
       // (Just its rules: it sets nothing)
@@ -452,7 +564,7 @@ function controlLive(ctl, specs, panel) {
       return h("button", { type: "button", class: "btn cp-btn",
         title: next === undefined ? "Runs its rules" : `${ctl.action === "add" ? `Adds ${ctl.amount ?? 1} to` : `Sets`} ${ctl.name}${ctl.action === "add" ? "" : ` to ${ctl.amount ?? 1}`}`,
         onclick: () => usedAfter(next === undefined ? null : sendControl(ctl, next, panel), panel, ctl, next) },
-        controlPicture(ctl, "cp-btn-icon"), label);
+        controlPicture(ctl, "cp-btn-icon"), label && h("span", { class: "cp-text" }, label));
     }
     case "dropdown":
       if (isPlayersDropdown(ctl)) {
@@ -544,23 +656,27 @@ function touchablePicture(panel, ctl) {
 // What a socket holds now: in a shown panel, the share's; the GM's own panel, shown: the same;
 // not shown: what it starts with. { items, by, byName } or null.
 function socketHeld(panel, ctl) {
+  if (isPreviewPanel(panel)) return panelPreview?.sockets[ctl.id] || null;
   const share = isSharedPanel(panel) ? (party.shares || []).find(s => s.id === panel.sharedId) : shownPanel(panel);
   if (share) return share.sockets?.[ctl.id] || null;
   return ctl.held?.length ? { items: ctl.held, by: "", byName: `The ${term("gm")}` } : null;
 }
 function socketLive(panel, ctl, label) {
+  if (isPreviewPanel(panel)) return socketPreview(panel, ctl, label);
   const held = socketHeld(panel, ctl), top = held?.items?.find(e => !e.parent);
   const player = isSharedPanel(panel), shared = player ? panel.sharedId : shownPanel(panel)?.id;
   const me = player && store.state.characters.find(c => c.id === panel.sharedChar);
   const call = async body => { try { if (me) await party.put(me.id); await party.api("POST", `api/share/${shared}/socket`, { control: ctl.id, ...body }); } catch (e) { toast(e.message); } };
   const put = uid => call({ character: me.id, uid });
+  // What it holds: a tile, as in an inventory: tapped, its details, with what can be done with it here
+  // (Take it, Give it back); pressed and held, those as its menu.
+  const acts = top ? [player && me && { icon: "move", label: "Take it", run: () => call({ character: me.id, take: true }) },
+    !player && shared && held.by && { icon: "undo", label: "Give it back", run: () => call({ take: true }) }].filter(Boolean) : [];
   const box = h("div", { class: "cp-socket" + (top ? " full" : "") },
     label && h("span", { class: "cp-label" }, label),
-    top ? [h("span", { class: "cp-socket-item" }, itemIcon(top.item, "row-icon"), h("b", null, entryName(top), top.qty > 1 && ` ×${top.qty.toLocaleString()}`)),
-        held.by && h("small", { class: "muted" }, player && held.by === me?.id ? "you put it in" : `put in by ${held.byName}`),
-        player && me && h("button", { type: "button", class: "btn", onclick: () => call({ character: me.id, take: true }) }, "Take it"),
-        !player && shared && held.by && h("button", { type: "button", class: "btn", onclick: () => call({ take: true }) }, "Give it back")]
-      : [h("span", { class: "muted small" }, player ? "Drop an item here" : shared ? "Empty" : "Empty (players put things in once it's shown to them)"),
+    top ? [socketTile(held, top, acts),
+        held.by && h("small", { class: "muted cp-note" }, player && held.by === me?.id ? "you put it in" : `put in by ${held.byName}`)]
+      : [h("span", { class: "muted small cp-note" }, player ? "Drop an item here" : shared ? "Empty" : "Empty (players put things in once it's shown to them)"),
         player && me && h("button", { type: "button", class: "btn", onclick: () => pickEntries(`Put something in ${label || "it"}`, me, [], map => { const uid = [...map.keys()][0]; if (uid) put(uid); }) },
           icon("plus"), "Put something in…")]);
   if (player && me && !top) {
@@ -680,7 +796,8 @@ const findItem = (p, id) => panelItems(p).find(c => c.id === id);
 
 function panelGrid(panel, editing) {
   const specs = knownValues(), index = tabIndex(panel);
-  const grid = h("div", { class: "cp-grid" + (editing ? " editing" : "") });
+  const styled = !editing && lookStyled(panel);
+  const grid = h("div", { class: ["cp-grid", editing && "editing", styled && "cp-styled", ...(styled ? lookClasses(panelLook(panel), true) : [])].filter(Boolean).join(" ") });
   grid.style.setProperty("--cols", panel.cols);
   grid.style.setProperty("--rows", panel.rows);
   if (editing) {
@@ -698,22 +815,25 @@ function panelGrid(panel, editing) {
   // Its background: behind the grid's cells, the size of the grid.
   const bg = bgLayer(panel.bg);
   if (bg) { grid.classList.add("has-bg"); grid.prepend(bg); }
-  return h("div", { class: "cp-wrap" }, grid);
+  if (styled && panel.css) usePanelCss(panel);
+  return h("div", { class: "cp-wrap" + (styled && !panelLook(panel).frame ? " lk-noframe" : ""), ...(styled && panel.css ? { "data-panel-css": panel.id } : {}) }, grid);
 }
 
 function controlCell(panel, ctl, specs, editing, grid) {
   const tabs = isTabs(ctl);
   const bg = BG_KINDS.has(ctl.type) ? bgLayer(ctl.bg) : null;
-  const el = h("div", { class: `cp-cell cp-type-${ctl.type}` + (ctl.color ? " coloured" : "") + (bg ? " has-bg" : "") }, bg);
+  const styled = !editing && lookStyled(panel);
+  const el = h("div", { class: [`cp-cell cp-type-${ctl.type}`, ctl.color && "coloured", bg && "has-bg", ...(styled ? lookClasses(controlLook(panel, ctl), false) : [])].filter(Boolean).join(" "),
+    ...(ctl.label ? { "data-label": ctl.label } : {}) }, bg);
   placeCell(el, ctl);
   if (ctl.color) el.style.setProperty("--cp", ctl.color);
   const live = () => tabs ? tabsLive(panel, ctl) : controlLive(ctl, specs, panel);
   // Hidden (showIf) or locked (lockIf): gone in Play mode; faded and marked in Edit mode, to arrange.
   const hidden = !controlShown(ctl), locked = controlLocked(ctl);
-  if (hidden && !editing && (playMode() || isSharedPanel(panel))) return null;
+  if (hidden && !editing && (playMode() || isPlayerView(panel))) return null;
   el.classList.toggle("cp-hidden", hidden);
   el.classList.toggle("cp-locked", locked);
-  const flag = (hidden || locked) && h("span", { class: "cp-flag", title: hidden ? "Hidden now: its Shown when doesn't hold (only Edit mode shows it)" : "Locked now: its Locked when holds" },
+  const flag = (hidden || locked) && h("span", { class: "cp-flag cp-note", title: hidden ? "Hidden now: its Shown when doesn't hold (only Edit mode shows it)" : "Locked now: its Locked when holds" },
     icon(hidden ? "eye-off" : "lock"));
   if (!editing) { el.append(...[locked ? h("div", { class: "cp-inert", inert: true }, live()) : live()].flat().filter(Boolean), flag || []); return el; }
 
@@ -780,7 +900,8 @@ function controlCell(panel, ctl, specs, editing, grid) {
 // ------------------------------------------------------------------ a panel's card
 
 function controlPanelCard(panel) {
-  const key = "gmc:" + panel.id, closed = ui.collapsed.has(key), editing = ui.panelEdit === panel.id;
+  // (Edit mode arranges its controls; Play mode uses them: the top bar's Play / Edit)
+  const key = "gmc:" + panel.id, closed = ui.collapsed.has(key), editing = canEditNow();
   const hidden = !controlShown(panel);
   if (hidden && playMode()) return null;
   const toggle = () => { closed ? ui.collapsed.delete(key) : ui.collapsed.add(key); render(); };
@@ -789,9 +910,12 @@ function controlPanelCard(panel) {
     h("div", { class: "group-head" },
       h("button", { class: "collapse" + (closed ? " closed" : ""), "aria-expanded": String(!closed), onclick: toggle }, icon("chevron"), h("h3", null, panel.name)),
       hidden && h("span", { class: "tag", title: "Its Shown when doesn't hold: Play mode hides it" }, "hidden now"),
+      clockwork.practice.on && h("span", { class: "tag on", title: "A panel's preview is open: values show as they are in its practice run, until it's closed" }, "practice run"),
       h("span", { class: "muted small" }, plural(panel.controls.length, "control")),
-      !closed && (editing || canEditNow()) && h("button", { class: "btn" + (editing ? " primary" : ""), onclick: () => { ui.panelEdit = editing ? null : panel.id; render(); } },
-        icon(editing ? "check" : "grid"), editing ? "Done" : "Arrange"),
+      !editing && panelItems(panel).length > 0 && iconBtn("eye", ui.panelAsPlayers?.has(panel.id) ? "Show it to work with (everything)" : "Show it as players see it (its look)", () => {
+        ui.panelAsPlayers = new Set(ui.panelAsPlayers || []); ui.panelAsPlayers.has(panel.id) ? ui.panelAsPlayers.delete(panel.id) : ui.panelAsPlayers.add(panel.id); render(); },
+        "look-toggle" + (ui.panelAsPlayers?.has(panel.id) ? " on" : "")),
+      panelItems(panel).length > 0 && h("button", { class: "btn", title: "See it as players would, and try it out", onclick: () => openPanelPreview(panel) }, icon("play"), "Preview"),
       party.active && isGmDevice() && !shownPanel(panel) && h("button", { class: "btn", onclick: () => openShowPanel(panel) }, icon("eye"), "Show to players…"),
       canEditNow() && iconBtn("edit", `Edit ${panel.name}`, () => editControlPanel(panel)),
       iconBtn("trash", `Delete ${panel.name}`, () => {
@@ -806,11 +930,73 @@ function controlPanelCard(panel) {
       editing && h("div", { class: "cp-arrange-bar" },
         h("p", { class: "muted small" }, "Click + to add a control (Tabs splits the panel into tabs). Drag a control to move it, or its corner to resize it; or select it and use the arrow keys (Shift to resize). The pencil edits it.",
           where && [" Arranging ", h("b", null, where), ": choose another tab to arrange it."])),
-      !panelItems(panel).length && !editing ? h("p", { class: "muted pad" }, "No controls yet: Arrange to add some.") : panelGrid(panel, editing),
+      !panelItems(panel).length && !editing ? h("p", { class: "muted pad" }, "No controls yet: switch to Edit (the top bar) to add some.") : panelGrid(panel, editing),
     ]);
 }
 
 // ------------------------------------------------------------------ making and editing
+
+// ------------------------------------------------------------------ previewing a panel
+// What players would see, to try out before showing it: the panel as it goes to them
+// (panelForPlayers: hidden controls gone, locked ones greyed), working as it would for them, as a
+// practice run (clockwork.practice): what its controls set, and their rules, take effect while the
+// preview's open, and it all goes back when it's closed (or Start again). Its sockets take test
+// items from the catalog. It follows the panel as it's changed (arranged beside it, in Edit mode).
+let panelPreview = null; // { id, box, close, sockets: { controlId: { items, by, byName } } }
+const previewSockets = panel => Object.fromEntries((panel.controls || []).filter(c => c.type === "socket" && c.held?.length)
+  .map(c => [c.id, { items: clone(c.held), by: "", byName: `The ${term("gm")}` }]));
+function openPanelPreview(panel) {
+  panelPreview?.close();
+  const box = h("div", { class: "panel-preview" });
+  // (a pointer down in it: not redrawn under it, mid-drag)
+  box.addEventListener("pointerdown", () => { box.dataset.held = "1"; addEventListener("pointerup", () => { delete box.dataset.held; setTimeout(drawPanelPreview); }, { once: true }); });
+  clockwork.practice.start();
+  const again = () => { clockwork.practice.start(); panelPreview.sockets = previewSockets(gmControls().find(p => p.id === panel.id) || panel); render(); toast("Back to how it was"); };
+  let close;
+  close = openModal(`Preview: ${panel.name}`, box, { wide: true, dock: true,
+    footer: [h("button", { class: "btn", onclick: again }, icon("undo"), "Start again"), h("button", { class: "btn primary", onclick: () => close() }, "Done")],
+    onClose: () => { if (panelPreview?.close === close) { panelPreview = null; clockwork.practice.end(); } } });
+  panelPreview = { id: panel.id, box, close, sockets: previewSockets(panel) };
+  drawPanelPreview();
+  return close;
+}
+// Drawn again on every render (render: the values changed, or the panel did).
+function drawPanelPreview() {
+  const pv = panelPreview;
+  if (!pv || !pv.close.panel?.isConnected) return;
+  const src = gmControls().find(p => p.id === pv.id);
+  if (!src) return pv.close();
+  if (pv.box.dataset.held || pv.box.contains(document.activeElement?.matches?.("input, textarea, select") ? document.activeElement : null)) return;
+  const panel = { ...panelForPlayers(src), preview: true };
+  setChildren(pv.box,
+    h("p", { class: "banner small preview-banner" }, icon("play"), h("span", null, h("b", null, "As players see it. "),
+      "A practice run: what you do here works as it would for them (values change, its rules run), and it all goes back when you close this.")),
+    controlShown(panel) ? panelGrid(panel, false) : h("p", { class: "muted pad" }, "Players would see: Not here right now (its Shown when doesn't hold)."),
+    h("p", { class: "muted small" }, "Only this panel's rules run here. Items' rules and the world's wait until you close it, since they'd change real things."));
+}
+// What a socket holds, as a tile (the inventory's): tapped, its details with what can be done with it
+// here (acts: [{ icon, label, run }]); pressed and held, those as its menu.
+function socketTile(held, e, acts) {
+  const holder = { id: "socket", items: held.items, coins: {} };
+  const open = () => { let close; close = openModal(entryName(e), itemDetails(currentItem(e, holder), null, e.srcId),
+    { footer: [...acts.map(a => h("button", { class: "btn", onclick: () => { close(); a.run(); } }, icon(a.icon), a.label)), h("button", { class: "btn primary", onclick: () => close() }, "Done")] }); };
+  const st = { char: holder, id: "socket", prefs: { show: { tiles: { details: false, tags: false, worth: false, weight: false } } }, open, menu: () => acts };
+  return h("div", { class: "cp-socket-tile tiles detail-minimal" }, entryTile(st, e));
+}
+// A socket in a preview: a test item from the catalog in, or out; either is "A control is used".
+function socketPreview(panel, ctl, label) {
+  const held = socketHeld(panel, ctl), top = held?.items?.find(e => !e.parent);
+  const used = (items, has) => { const e = items.find(x => !x.parent); controlUsed(panel.id, ctl.id, undefined, "", { item: socketItemFacts(e, items.filter(x => x.parent)), has }); render(); };
+  const put = () => openStockPicker({ title: `Put a test item in ${label || "it"}`, has: () => false,
+    add: (id, snapshot) => { const tmp = { items: [] }; addToInventory(tmp, { ...snapshot, id }, 1); panelPreview.sockets[ctl.id] = { items: tmp.items, by: "preview", byName: "you" }; used(tmp.items, true); } });
+  const take = () => { const items = held.items; delete panelPreview.sockets[ctl.id]; used(items, false); };
+  return h("div", { class: "cp-socket" + (top ? " full" : "") },
+    label && h("span", { class: "cp-label" }, label),
+    top ? [socketTile(held, top, [{ icon: "move", label: "Take it", run: take }]),
+        h("small", { class: "muted cp-note" }, held.by === "preview" ? "a test item" : `put in by ${held.byName}`)]
+      : [h("span", { class: "muted small cp-note" }, "Empty"),
+        h("button", { type: "button", class: "btn", title: "Put a test item in (from the catalog)", onclick: put }, icon("plus"), "Test item…")]);
+}
 
 // ------------------------------------------------------------------ showing a panel to players
 // A shared screen (js/shared.js: kind "panel"): the GM chooses who; the panel goes as it is (its
@@ -821,7 +1007,7 @@ function controlPanelCard(panel) {
 const shownPanel = panel => (party.active ? party.shares || [] : []).find(s => s.kind === "panel" && s.fromMine && s.panelId === panel.id) || null;
 // A panel as it goes to players: as it is (its controls, drawings and pictures' ids).
 const panelForPlayers = panel => clone({ id: panel.id, kind: "panel", name: panel.name, cols: panel.cols, rows: panel.rows, controls: panel.controls,
-  ...(panel.showIf ? { showIf: panel.showIf } : {}), ...(panel.bg ? { bg: panel.bg } : {}) });
+  ...(panel.showIf ? { showIf: panel.showIf } : {}), ...(panel.bg ? { bg: panel.bg } : {}), ...(panel.display ? { display: panel.display } : {}), ...(panel.css ? { css: panel.css } : {}) });
 // Its pictures, so the players' devices can fetch them from the host.
 async function uploadPanelImages(panel) {
   for (const id of panelImages(panel)) { const data = await imageStore.get(id); if (data) await party.uploadImage(id, data).catch(() => {}); }
@@ -907,7 +1093,8 @@ function controlRules(panel, ctl) {
 
 function editControlPanel(panel) {
   const isNew = !panel;
-  const draft = panel ? { name: panel.name, cols: panel.cols, rows: panel.rows, ...(panel.showIf ? { showIf: clone(panel.showIf) } : {}), ...(panel.bg ? { bg: clone(panel.bg) } : {}) }
+  const draft = panel ? { name: panel.name, cols: panel.cols, rows: panel.rows, ...(panel.showIf ? { showIf: clone(panel.showIf) } : {}), ...(panel.bg ? { bg: clone(panel.bg) } : {}),
+    ...(panel.display ? { display: clone(panel.display) } : {}), ...(panel.css ? { css: panel.css } : {}) }
     : { name: "", cols: 6, rows: 4 };
   let close;
   const num = (key, label, min, max) => h("label", { class: "field" }, h("span", null, label),
@@ -919,14 +1106,15 @@ function editControlPanel(panel) {
     close();
     if (isNew) {
       const p = { id: "gc" + uid(), kind: "panel", name, cols: draft.cols, rows: draft.rows, controls: [], ...(draft.showIf ? { showIf: draft.showIf } : {}),
-        ...(cleanBg(draft.bg) ? { bg: cleanBg(draft.bg) } : {}) };
-      ui.panelEdit = p.id;
+        ...(cleanBg(draft.bg) ? { bg: cleanBg(draft.bg) } : {}), ...(draft.display ? { display: draft.display } : {}), ...(draft.css?.trim() ? { css: draft.css.slice(0, 20000) } : {}) };
       commit(s => { s.gmControls = [...(s.gmControls || []), p]; }, `Made ${name}`);
     } else updatePanel(panel.id, p => {
       Object.assign(p, { name, cols: draft.cols, rows: draft.rows });
       if (draft.showIf) p.showIf = draft.showIf; else delete p.showIf;
       const bg = cleanBg(draft.bg);
       if (bg) p.bg = bg; else delete p.bg;
+      if (draft.display) p.display = draft.display; else delete p.display;
+      if (draft.css?.trim()) p.css = draft.css.slice(0, 20000); else delete p.css;
     }, `Saved ${name}`);
   };
   close = openModal(isNew ? "New panel" : `Edit ${panel.name}`, h("div", { class: "form" },
@@ -935,7 +1123,8 @@ function editControlPanel(panel) {
     h("div", { class: "form grid" }, num("cols", "Columns", 1, 12), num("rows", "Rows", 1, 24)),
     h("p", { class: "muted small" }, "A grid for your controls: sliders, range sliders, switches, buttons, dropdowns, polygons, boards, pictures and text. Each sets a Global value or a player's or item's Local value."),
     bgField(draft, "Background (behind its controls)"),
-    condField(draft, "showIf", "Shown when", "Always shown", "Only while…", "Hidden while it doesn't hold (Edit mode still shows it, marked). A rule shows it by setting the value.")),
+    condField(draft, "showIf", "Shown when", "Always shown", "Only while…", "Hidden while it doesn't hold (Edit mode still shows it, marked). A rule shows it by setting the value."),
+    lookField(draft), cssField(draft, panel?.id)),
   { footer: [h("button", { class: "btn", onclick: () => close() }, "Cancel"), h("button", { class: "btn primary", onclick: save }, icon("check"), isNew ? "Make it" : "Save")] });
 }
 
@@ -1159,7 +1348,7 @@ function editPanelControl(panel, ctl, at) {
       h("select", { onchange: e => { draft.reverse = e.target.value === "1"; } },
         h("option", { value: "", selected: !draft.reverse }, "The right, or the top when upright"),
         h("option", { value: "1", selected: !!draft.reverse }, "The left, or the bottom when upright")),
-      h("small", { class: "muted" }, "Make it taller than it's wide (in Arrange, drag its corner) and it stands upright.")),
+      h("small", { class: "muted" }, "Make it taller than it's wide (in Edit mode, drag its corner) and it stands upright.")),
     draft.type === "button" && [
       h("label", { class: "field" }, h("span", null, "When pressed"), h("select", { onchange: e => { draft.action = e.target.value; drawFields(); } },
         h("option", { value: "set", selected: draft.action !== "add" && draft.action !== "rules" }, "Set the value to"),
@@ -1183,6 +1372,7 @@ function editPanelControl(panel, ctl, at) {
       draft.color && h("button", { type: "button", class: "btn", onclick: () => { delete draft.color; drawFields(); } }, "Default"))),
     condField(draft, "showIf", "Shown when", "Always shown", "Only while…", "Hidden while it doesn't hold (Edit mode still shows it, faded). A rule shows it by setting the value."),
     condField(draft, "lockIf", "Locked when", "Never locked", "Locked while…", "It can't be used while it holds. A rule locks or unlocks it by setting the value."),
+    lookField(draft, panel),
     !isNew && draft.type !== "tabs" && controlRules(panel, draft));
   drawFields();
 

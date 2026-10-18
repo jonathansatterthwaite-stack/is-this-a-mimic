@@ -734,6 +734,7 @@ function openTradeShare(s0) {
   const id = "share:" + s0.id, body = h("div", { class: "trade-live" });
   const cur = () => (party.shares || []).find(x => x.id === s0.id);
   const foot = h("div", { class: "inline wrap trade-foot" });
+  let targets = () => [];
   const draw = () => {
     const s = cur();
     if (!s) return;
@@ -743,6 +744,9 @@ function openTradeShare(s0) {
     const mine = s.sides?.[meId] || {}, theirs = s.sides?.[otherId] || {};
     const agreed = id => (s.agreed || []).includes(id);
     const change = fn => tradeSide(s, meId, fn);
+    // (an item at hand, from the At hand tab: onto my side)
+    targets = e => me?.items.some(x => x.uid === e.uid) && !(mine.items || []).some(i => i.uid === e.uid)
+      ? [{ label: "Put it in what you give", run: () => change(side => { side.items.push({ uid: e.uid, qty: 1 }); }) }] : [];
     // My side: what I give (drag in from the inventory beside it, or + Add), coins, a note; what they asked for of mine.
     const asksOfMine = (theirs.asks || []).filter(a => !(mine.items || []).some(i => i.uid === a.uid));
     const drop = h("div", { class: "trade-drop",
@@ -787,8 +791,6 @@ function openTradeShare(s0) {
     setChildren(body,
       s.reason && h("p", { class: "banner warn small" }, "It couldn't be made: ", s.reason),
       h("div", { class: "trade-live-sides" }, myCol, theirCol),
-      me && atHandStrip(me, e => (mine.items || []).some(i => i.uid === e.uid) ? []
-        : [{ label: "Put it in what you give", run: () => change(side => { side.items.push({ uid: e.uid, qty: 1 }); }) }]),
       h("p", { class: "muted small" }, "Each of you puts in what you give, and can ask for something of the other's. Any change clears both agreements; when you both agree, it all changes hands at once. Giving a container gives what's in it."));
     setChildren(foot,
       h("button", { class: "btn", onclick: () => confirmDialog(`Walk away from the trade with ${tradeName(s, otherId)}? It ends for both of you.`, "Walk away", () => endShare(s)) }, "Walk away"),
@@ -796,7 +798,7 @@ function openTradeShare(s0) {
         try { await party.api("POST", `api/share/${s.id}/agree`, { character: meId, agree: !agreed(meId) }); } catch (e) { toast(e.message); }
       } }, icon(agreed(meId) ? "undo" : "check"), agreed(meId) ? "Not yet" : "Agree"));
   };
-  const close = sharedScreen(id, `Trade: ${s0.fromName} ⇄ ${s0.withName}`, body, { footer: foot, redraw: draw });
+  const close = sharedScreen(id, `Trade: ${s0.fromName} ⇄ ${s0.withName}`, body, { footer: foot, redraw: draw, targets: e => targets(e) });
   draw();
   return close;
 }

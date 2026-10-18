@@ -258,7 +258,7 @@ function inventoryMenu(e) {
     !e.purse && { icon: "coins", label: "Sell", run: () => openSell(e.uid) },
     !e.purse && party.active && party.others().length > 0 && { icon: "users", label: "Trade", run: () => openTradeBuilder(null, e.uid) },
     party.active && { icon: "eye", label: "Show…", run: () => openShowItem(e.uid) },
-    party.active && !e.purse && { icon: "star", label: isAtHand(store.char(), e) ? "Not at hand" : "Keep at hand", run: () => toggleAtHand(e.uid) },
+    !e.purse && { icon: "star", label: isAtHand(store.char(), e) ? "Not at hand" : "Keep at hand", run: () => toggleAtHand(e.uid) },
     !e.purse && { icon: "trash", label: discarding(char) ? "Discard" : "Remove", danger: true, run: () => confirmRemoveEntry(e.uid) },
   ].filter(Boolean);
 }

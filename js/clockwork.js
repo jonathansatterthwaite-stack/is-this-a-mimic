@@ -34,14 +34,20 @@ const clockworkOn = () => (party.active ? party.campaign?.clockwork : store.camp
 
 // ------------------------------------------------------------------ where values are kept
 
-// With what a control being dragged shows meanwhile (clockwork.preview) on top.
-let previewing = null, previewMerged = null;
+// With a practice run's values (clockwork.practice: a panel's preview) and what a control being
+// dragged shows meanwhile (clockwork.preview) on top.
+let previewing = null, practising = null, previewMerged = null;
 function valueSet() {
   const g = party.active ? party.gm || {} : store.state.gmValues || {};
-  if (!previewing) return g;
+  if (!previewing && !practising) return g;
   if (previewMerged?.from !== g) {
-    const merged = { party: { ...g.party, ...previewing.party }, characters: { ...g.characters }, items: { ...g.items } };
-    for (const group of ["characters", "items"]) for (const [t, b] of Object.entries(previewing[group] || {})) merged[group][t] = { ...merged[group][t], ...b };
+    let merged = g;
+    for (const layer of [practising, previewing]) {
+      if (!layer) continue;
+      const m = { party: { ...merged.party, ...layer.party }, characters: { ...merged.characters }, items: { ...merged.items } };
+      for (const group of ["characters", "items"]) for (const [t, b] of Object.entries(layer[group] || {})) m[group][t] = { ...m[group][t], ...b };
+      merged = m;
+    }
     previewMerged = { from: g, merged };
   }
   return previewMerged.merged;
@@ -70,6 +76,8 @@ const stillMoving = (v, now = clockNow()) => isMoving(v) && v.rate !== 0 && (mov
 // clockwork.set (below). scope: "party" (a Global), "character" or "item" (Locals); target: "" |
 // charId | "charId/uid".
 async function putValue(scope, target, key, value) {
+  // (a practice run: kept on top of the real values, not sent or saved; see clockwork.practice)
+  if (practising) { putGmValue(practising, scope, target, key, value); previewMerged = null; setTimeout(render); return; }
   if (party.active) return party.setGm(scope, target, key, value);
   store.update(s => { s.gmValues = putGmValue(s.gmValues || {}, scope, target, key, value); });
 }
@@ -411,6 +419,15 @@ Object.assign(clockwork, {
     redrawSoon();
   },
 });
+// A practice run (a panel's preview: js/control-panels.js, openPanelPreview): the values set while
+// it's on, by anything, are kept on top of the real ones, not sent or saved; ended (or started
+// again), they're gone. Rules that would change real things wait meanwhile (items' and the world's:
+// runTriggers); a shop isn't opened or closed (the shop action says it would be).
+clockwork.practice = {
+  get on() { return !!practising; },
+  start() { practising = {}; previewMerged = null; setTimeout(render); },
+  end() { if (!practising) return; practising = null; previewMerged = null; setTimeout(render); },
+};
 
 // Live icons follow a preview once a frame, however fast the pointer moves.
 let redrawQueued = false;

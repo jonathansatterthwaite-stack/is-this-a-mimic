@@ -73,12 +73,16 @@ function openShared(x) {
 // A shared screen: docked on a wide screen, a window filling a phone's screen. Its — (and ×)
 // minimise it to the tray; footer: its own buttons; redraw: called as the party changes (not
 // while something in it is being typed in). Returns close (close.panel: the screen).
-function sharedScreen(id, title, body, { footer = null, head = null, redraw = null } = {}) {
+// targets(e): where an item at hand can go on it ([{ label, run }]: see openAtHandItem); while it
+// covers the top bar (not docked), its header has an At hand button.
+function sharedScreen(id, title, body, { footer = null, head = null, redraw = null, targets = null } = {}) {
   if (sharedOpen && sharedOpen.id !== id && sharedOpen.close.panel?.isConnected) sharedOpen.close(); // (one at a time: the other waits in the tray)
-  const close = openModal(title, body, { wide: true, dock: true, minimise: true, footer, head,
+  const handBtn = targets && !wideLayout() ? iconBtn("star", "At hand", () => atHandOpen ? closeAtHand() : openAtHand()) : null;
+  if (handBtn) handBtn.classList.add("at-hand-open");
+  const close = openModal(title, body, { wide: true, dock: true, minimise: true, footer, head: handBtn ? [handBtn, head].filter(Boolean) : head,
     onClose: () => { if (sharedOpen?.close === close) { sharedOpen = null; setTimeout(render); } } });
   close.panel.classList.add("shared-screen");
-  sharedOpen = { id, close, redraw };
+  sharedOpen = { id, close, redraw, targets };
   setTimeout(render); // (the tray and its chips)
   return close;
 }
@@ -155,6 +159,7 @@ function syncShared() {
   }
   drawSharedButton();
   drawSharedChips();
+  drawAtHandTab();
   if (!party.active) return;
   takePanelUses(); sendPanelChanges(); keepSharedPending();
   const next = sharedList().find(x => x.fresh && !x.mine && (x.kind === "item" || x.kind === "trade" || x.kind === "panel") && !sharedAuto.has(x.id));
@@ -175,6 +180,7 @@ const panelShareChar = s => (s.to || []).find(id => party.isLinked(id)) || null;
 
 function openPanelShare(s0) {
   const id = "share:" + s0.id, box = h("div", { class: "shared-panel" });
+  let targets = () => [];
   const draw = () => {
     const s = (party.shares || []).find(x => x.id === s0.id);
     if (!s) return;
@@ -188,10 +194,12 @@ function openPanelShare(s0) {
       } }));
     setChildren(box, !controlShown(panel) ? h("p", { class: "muted pad" }, "Not here right now.")
       : panelGrid(panel, false),
-      h("p", { class: "muted small" }, `What you do here goes to the ${term("gm")}'s device, which makes it happen.`),
-      me && (panel.controls || []).some(c => c.type === "socket") && atHandStrip(me, sockets));
+      panelLook(panel).notes && h("p", { class: "muted small" }, `What you do here goes to the ${term("gm")}'s device, which makes it happen.`));
+    close?.panel?.classList.toggle("no-title", !panelLook(panel).title); // (its look: no name on the window)
+    targets = e => me && isAtHand(me, e) ? sockets(e) : [];
   };
-  const close = sharedScreen(id, s0.title || "Panel", box, { redraw: draw });
+  let close = null;
+  close = sharedScreen(id, s0.title || "Panel", box, { redraw: draw, targets: e => targets(e) });
   draw();
   return close;
 }
@@ -304,12 +312,13 @@ function sendPanelChanges() {
 }
 
 // ------------------------------------------------------------------ at hand
-// Up to six of a character's items kept at hand (char.atHand: their uids; bookmarks: the items stay
-// where they are): a strip along the bottom of a trade's and a shown panel's screen, to drop one
-// into a socket or a trade without leaving it. A chip drags (a wide screen); tapped (a phone can't
-// drag), it offers where it can go here.
-const AT_HAND_MAX = 6;
-const atHand = c => (c?.atHand || []).map(uid => c.items.find(e => e.uid === uid)).filter(Boolean);
+// Up to five of a character's items kept at hand (char.atHand: their uids; bookmarks: the items stay
+// where they are), always a tap away: the At hand tab sticks out of the top bar's middle (on a
+// phone, up from the bottom bar) and opens them as tiles. A tile drags (onto a trade's side or a
+// socket, on a wide screen); tapped, it opens the item, or, on a shared screen with somewhere for it
+// (sharedScreen's targets: a trade's side, a socket), offers those too. Pressed and held: the item's menu.
+const AT_HAND_MAX = 5;
+const atHand = c => (c?.atHand || []).map(uid => c.items.find(e => e.uid === uid)).filter(Boolean).slice(0, AT_HAND_MAX);
 const isAtHand = (c, e) => !!c?.atHand?.includes(e.uid);
 function toggleAtHand(uid, charId = store.char()?.id) {
   const c = store.state.characters.find(x => x.id === charId);
@@ -320,26 +329,97 @@ function toggleAtHand(uid, charId = store.char()?.id) {
     const ch = s.characters.find(x => x.id === charId);
     ch.atHand = on ? atHand(ch).map(e => e.uid).filter(u => u !== uid) : [...atHand(ch).map(e => e.uid), uid];
     if (!ch.atHand.length) delete ch.atHand;
-  }, on ? "No longer at hand" : "Kept at hand: shared screens show it");
+  }, on ? "No longer at hand" : "Kept at hand: the At hand tab has it");
 }
-// The strip: the items as tiles (the inventory's square tiles), no heading (it explains itself),
-// nothing when none are at hand. char: whose; targets(e): where an item can go on this screen,
-// [{ label, run }]. A tile drags; tapped, it offers its targets, its details and taking it off.
+
+// Where an item can go on the shared screen open now: [{ label, run }].
+const atHandTargets = e => sharedOpen?.targets && sharedOpen.close.panel?.isConnected ? sharedOpen.targets(e) : [];
+// The drawer: its tab pulls it out of the top bar (on a phone, up out of the bottom bar, a second bar
+// above it) and back. It stays out until its tab puts it away: through other tabs and windows, and
+// next time (kept on this device). Out, it takes its room: the view moves down (on a phone, up), and
+// a window over everything leaves it clear (the drawer then sits at the screen's edge).
+let atHandOpen = null; // (read from the device's settings once they're loaded)
+const AT_HAND_KEY = "mimic-at-hand";
+function setAtHandOpen(open) {
+  atHandOpen = open;
+  kv.set(AT_HAND_KEY, open ? "open" : "");
+  drawAtHandTab();
+}
+const openAtHand = () => setAtHandOpen(true), closeAtHand = () => setAtHandOpen(false);
+// Called on every render: the tab, the drawer (redrawn only when what's in it changed), its place.
 const AT_HAND_SHOW = { tiles: { details: false, tags: false, worth: false, weight: false } };
-function atHandStrip(char, targets) {
-  const list = atHand(char);
-  if (!list.length) return null;
-  const st = { char, id: "inv", move: true, atHandStrip: true, prefs: { show: AT_HAND_SHOW },
-    open: e => {
-      let close;
-      const go = run => () => { close(); run(); };
-      const here = targets(e), row = (ic, label, run) => h("button", { type: "button", class: "row row-main switch", onclick: go(run) }, icon(ic), h("span", { class: "grow" }, label));
-      close = openModal(entryName(e), h("div", { class: "group move-to" },
-        here.map(t => row("move", t.label, t.run)),
-        row("eye", "Details", () => openEntry(e.uid)),
-        row("x", "Take it off at hand", () => toggleAtHand(e.uid, char.id))));
-    } };
-  const box = h("div", { class: "at-hand tiles detail-minimal" }, list.map(e => entryTile(st, e)));
-  setTimeout(() => fitTileNames(box));
-  return box;
+function drawAtHandTab() {
+  const box = document.getElementById("at-hand");
+  if (!box) return;
+  if (atHandOpen === null) atHandOpen = kv.get(AT_HAND_KEY) === "open";
+  const c = store.char(), tab = document.getElementById("at-hand-tab"), pop = document.getElementById("at-hand-pop"), root = document.documentElement.style;
+  box.hidden = !c;
+  document.body.classList.toggle("has-at-hand-tab", !!c);
+  const open = !!c && atHandOpen;
+  document.body.classList.toggle("at-hand-open", open);
+  box.classList.toggle("open", open);
+  if (!c) { for (const v of ["--ah-push", "--ah-over-top", "--ah-over-bottom"]) root.removeProperty(v); return; }
+  if (!tab.firstChild) tab.append(icon("star"));
+  tab.setAttribute("aria-expanded", String(open));
+  tab.setAttribute("aria-label", open ? "Put away what's at hand" : "At hand");
+  tab.title = open ? "Put it away" : "At hand: what you keep to hand";
+  // (an item's details open: on a phone, no handle, so they sit right on the drawer: css)
+  box.classList.toggle("no-handle", !!document.querySelector(".modal.item-details"));
+  tab.onclick = () => setAtHandOpen(!atHandOpen);
+  box.classList.toggle("covered", !!document.querySelector("#modal-root .overlay"));
+  // What's in it: five places, the items as square tiles (a tile may be mid-drag: redrawn only on a
+  // change; put away, not until it's pulled out again: every render calls this).
+  const list = open ? atHand(c) : null, sig = open && JSON.stringify([c.id, list.map(e => [e.uid, e.qty, entryName(e), e.charges, currentItem(e, c).icon])]);
+  if (open && pop.dataset.sig !== sig) {
+    pop.dataset.sig = sig;
+    const st = { char: c, id: "inv", move: true, atHandList: true, prefs: { show: AT_HAND_SHOW }, open: e => openAtHandItem(c, e) };
+    setChildren(pop, h("div", { class: "at-hand-inner" },
+      h("div", { class: "at-hand-grid tiles detail-minimal" }, list.map(e => entryTile(st, e)),
+        Array.from({ length: AT_HAND_MAX - list.length }, () => h("span", { class: "at-hand-empty", "aria-hidden": "true" }))),
+      !list.length && h("p", { class: "muted small" }, `Keep up to ${AT_HAND_MAX} things at hand: Keep at hand, in an item's menu or details.`)));
+    setTimeout(() => fitTileNames(pop));
+  }
+  // (its place measured once the page is laid out: not in the middle of a render)
+  if (!atHandPlacing) atHandPlacing = requestAnimationFrame(placeAtHand);
+}
+// Where it goes: against the top bar (a phone: on the bottom bar, or the shared chips above it); with
+// a window over everything, at the screen's edge. And the room it takes, out (its full height, not
+// as it slides): kept while a window covers it, so what's behind doesn't jump.
+let atHandPlacing = 0;
+// (the window resized, a phone turned: placed again, the next frame)
+addEventListener("resize", () => { if (!atHandPlacing) atHandPlacing = requestAnimationFrame(placeAtHand); });
+function placeAtHand() {
+  atHandPlacing = 0;
+  const box = document.getElementById("at-hand"), root = document.documentElement.style;
+  if (box.hidden) return;
+  const phone = matchMedia("(max-width: 720px)").matches, covered = box.classList.contains("covered"), open = box.classList.contains("open");
+  if (phone) {
+    const chips = document.getElementById("shared-chips"), under = (!chips.hidden ? chips : document.getElementById("nav")).getBoundingClientRect();
+    box.style.top = ""; box.style.bottom = covered ? "0px" : Math.round(innerHeight - under.top) + "px";
+  } else {
+    box.style.bottom = ""; box.style.top = covered ? "0px" : Math.round(document.querySelector(".topbar").getBoundingClientRect().bottom) + "px";
+  }
+  const room = open ? Math.ceil(document.querySelector("#at-hand-pop > .at-hand-inner")?.offsetHeight || 0) + 1 : 0;
+  const tabH = document.getElementById("at-hand-tab").offsetHeight; // (0 while it steps aside)
+  root.setProperty("--ah-push", room + "px");
+  root.setProperty("--ah-over-top", (open && covered && !phone ? room + tabH : 0) + "px");
+  root.setProperty("--ah-over-bottom", (open && covered && phone ? room + tabH : 0) + "px");
+}
+// A window opening or closing moves it (to the screen's edge, over the window, and back): windows
+// open without a render.
+{ const moved = new MutationObserver(() => drawAtHandTab());
+  moved.observe(document.getElementById("modal-root"), { childList: true });
+  moved.observe(document.getElementById("dock"), { childList: true }); } // (docked details: the handle steps aside)
+// A tile tapped: the item; on a shared screen with somewhere for it, where it can go too. (The
+// drawer stays out.)
+function openAtHandItem(c, e) {
+  const here = atHandTargets(e);
+  if (!here.length) return openEntry(e.uid);
+  let close;
+  const go = run => () => { close(); run(); };
+  const row = (ic, label, run) => h("button", { type: "button", class: "row row-main switch", onclick: go(run) }, icon(ic), h("span", { class: "grow" }, label));
+  close = openModal(entryName(e), h("div", { class: "group move-to" },
+    here.map(t => row("move", t.label, t.run)),
+    row("eye", "Details", () => openEntry(e.uid)),
+    row("x", "Take it off at hand", () => toggleAtHand(e.uid, c.id))));
 }

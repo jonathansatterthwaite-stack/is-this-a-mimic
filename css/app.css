@@ -1809,13 +1809,92 @@ button.fm-node:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--fmk) 35%, 
   border: 2px dashed var(--border); border-radius: 10px; text-align: center; }
 .cp-socket.full { border-style: solid; border-color: color-mix(in srgb, #c9a64a 70%, var(--border)); background: color-mix(in srgb, #c9a64a 14%, transparent); }
 .cp-socket.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
-.cp-socket-item { display: inline-flex; align-items: center; gap: 6px; max-width: 100%; min-width: 0; overflow-wrap: anywhere; }
 .cp-socket .btn { padding: 3px 10px; min-height: 0; max-width: 100%; white-space: normal; text-align: center; } /* (a narrow socket: the button wraps inside it) */
 
-/* At hand (js/shared.js): a strip of bookmarked items along the bottom of a trade's or a shown panel's screen. */
-.at-hand.tiles { display: flex; flex-wrap: nowrap; justify-content: flex-start; gap: 6px; overflow-x: auto; min-width: 0; max-width: 100%;
-  padding: 10px 0 4px; border-top: 1px solid var(--border); --tile-size: 76px; }
-.at-hand .tile { flex: none; width: var(--tile-size); cursor: grab; }
-.shared-panel, .trade-live { min-width: 0; max-width: 100%; } /* (the strip scrolls; it doesn't widen the screen) */
+/* At hand (js/shared.js): a drawer against the top bar's middle (on a phone, a second bar on the
+   bottom one), pulled out and put away by its tab, which rides on its outer edge. Out, it takes its
+   room (--ah-push), and windows over everything leave it clear (--ah-over-top / -bottom). */
+.at-hand { position: fixed; left: 50%; transform: translateX(-50%); z-index: 21; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
+.at-hand[hidden] { display: none; }
+.at-hand > * { pointer-events: auto; }
+body.at-hand-open .at-hand.covered { z-index: 56; } /* (out, it stays usable over a window) */
+.at-hand-pop { max-height: 0; overflow: hidden; visibility: hidden; transition: max-height .25s ease, visibility 0s .25s;
+  background: var(--bg); border: 1px solid var(--border); border-top: 0; border-radius: 0 0 14px 14px; margin-top: -1px;
+  box-shadow: 0 6px 16px color-mix(in srgb, #000 10%, transparent); }
+.at-hand.open .at-hand-pop { max-height: 260px; visibility: visible; transition: max-height .25s ease, visibility 0s; }
+.at-hand-inner { padding: 10px; }
+.at-hand-inner .muted { margin: 8px 2px 0; max-width: calc(5 * 76px + 24px); }
+.at-hand-pop .at-hand-grid { display: grid; grid-template-columns: repeat(5, 76px); gap: 6px; padding: 0; }
+.at-hand-pop .at-hand-grid .tile { width: auto; min-width: 0; min-height: 0; aspect-ratio: 1; cursor: grab; }
+.at-hand-empty { aspect-ratio: 1; border: 2px dashed var(--border); border-radius: 12px; }
+.at-hand-tab { display: inline-flex; align-items: center; gap: 6px; height: 28px; padding: 0 12px 2px; margin-top: -1px;
+  background: var(--bg); color: var(--text); font: inherit; font-size: .8rem; font-weight: 600; cursor: pointer;
+  border: 1px solid var(--border); border-top: 0; border-radius: 0 0 12px 12px; box-shadow: 0 3px 6px color-mix(in srgb, #000 8%, transparent); }
+.at-hand-tab .icon { width: 15px; height: 15px; color: var(--accent); }
+.at-hand.open .at-hand-tab { box-shadow: none; }
+.at-hand-tab { min-width: 44px; justify-content: center; } /* (just a star) */
+main { transition: margin-top .25s ease; }
+@media (min-width: 721px) {
+  main { margin-top: var(--ah-push, 0px); }
+  main.wide > #panels, main.wide > #side, main.wide.has-dock > .dock { top: calc(72px + var(--ah-push, 0px)); }
+  main.wide > #panels, main.wide > #side, .modal.docked { max-height: calc(100vh - 88px - var(--ah-push, 0px)); }
+}
+.overlay { padding-top: calc(16px + var(--ah-over-top, 0px)); padding-bottom: calc(16px + var(--ah-over-bottom, 0px)); }
+.overlay .modal { max-height: min(88vh, 900px, calc(100vh - 32px - var(--ah-over-top, 0px) - var(--ah-over-bottom, 0px))); }
+@media (max-width: 720px) {
+  /* a second bottom bar: the whole width, the tab on its top edge, above the bottom bar (or the shared chips) */
+  .at-hand { left: 0; right: 0; transform: none; flex-direction: column-reverse; }
+  .at-hand-pop { width: 100%; background: var(--surface); border: 0; border-top: 1px solid var(--border); border-radius: 0; margin: 0 0 -1px;
+    box-shadow: 0 -4px 12px color-mix(in srgb, #000 8%, transparent); }
+  .at-hand.covered .at-hand-pop { padding-bottom: env(safe-area-inset-bottom); }
+  .at-hand-inner { padding: 8px 12px; }
+  .at-hand-inner .muted { max-width: none; }
+  .at-hand-pop .at-hand-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+  .at-hand-tab { height: 26px; padding: 2px 12px 0; margin: 0 0 -1px; background: var(--surface); border: 1px solid var(--border); border-bottom: 0;
+    border-radius: 12px 12px 0 0; box-shadow: 0 -3px 6px color-mix(in srgb, #000 6%, transparent); position: relative; z-index: 1; }
+  body.has-at-hand-tab { padding-bottom: calc(92px + var(--ah-push, 0px) + env(safe-area-inset-bottom)); }
+  body.has-at-hand-tab.has-shared-chips { padding-bottom: calc(138px + var(--ah-push, 0px) + env(safe-area-inset-bottom)); }
+  .overlay { padding-top: 0; padding-bottom: var(--ah-over-bottom, 0px); }
+  .overlay .modal, .overlay .modal.wide { max-height: min(92vh, calc(100vh - 8px - var(--ah-over-bottom, 0px))); }
+  /* a phone: no handle while an item's details are open, so they sit right on the drawer */
+  .at-hand.no-handle .at-hand-tab { display: none; }
+}
+.shared-panel, .trade-live { min-width: 0; max-width: 100%; }
+/* A panel's look (js/control-panels.js: LOOK): as players see it (.cp-styled), each control's choices as lk- classes. */
+.cp-styled .cp-cell { font-size: 1rem; }
+.cp-styled .cp-cell .cp-label { font-size: .82em; }
+.cp-styled .cp-cell .cp-readout { font-size: 1.15em; }
+.cp-styled .cp-cell :is(button, select, input, output) { font-size: inherit; font-family: inherit; }
+.cp-cell.lk-nolabels :is(.cp-label, .cp-text) { display: none; }
+.cp-cell.lk-novalues :is(.cp-out, .cp-readout) { display: none; }
+.cp-cell.lk-nonotes .cp-note { display: none; }
+.cp-cell.lk-noborder { border-top-color: transparent; border-right-color: transparent; border-bottom-color: transparent; }
+.cp-cell.lk-notint { border-left-width: 1px; border-left-color: var(--border); }
+.cp-cell.lk-notint.lk-noborder { border-left-color: transparent; }
+.cp-cell.coloured.lk-notint { background: var(--surface-2); }
+.cp-cell.coloured.lk-notint .cp-btn { background: var(--surface); }
+.cp-cell.lk-nocard, .cp-grid.has-bg > .cp-cell.lk-nocard { background: transparent; }
+.cp-cell.lk-corners-square, .cp-cell.lk-corners-square :is(.btn, .cp-select, .cp-switch, .tile, .cp-socket) { border-radius: 0; }
+.cp-cell.lk-size-s { font-size: .85rem; } .cp-cell.lk-size-l { font-size: 1.2rem; } .cp-cell.lk-size-xl { font-size: 1.45rem; }
+.cp-cell.lk-font-serif { font-family: var(--display); }
+.cp-cell.lk-font-plain { font-family: Arial, Helvetica, sans-serif; }
+.cp-cell.lk-font-mono { font-family: ui-monospace, "Cascadia Mono", Consolas, "Courier New", monospace; }
+.cp-cell.lk-font-hand { font-family: "Segoe Print", "Bradley Hand", "Comic Sans MS", "Chalkboard SE", cursive; }
+.cp-grid.lk-gap-none { --gap: 0px; } .cp-grid.lk-gap-s { --gap: 3px; } .cp-grid.lk-gap-l { --gap: 12px; }
+.cp-wrap.lk-noframe { padding: 0; }
+.cp-wrap[data-panel-css] { position: relative; contain: paint; } /* (its own CSS stays inside it) */
+.modal.no-title .modal-head h2 { visibility: hidden; }
+.look-toggle.on { color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.look-field > summary { cursor: pointer; font-weight: 600; }
+.look-field[open] > summary { margin-bottom: 6px; }
+.look-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.look-row > span { min-width: 0; }
+.look-row select { flex: none; width: auto; max-width: 55%; }
+.css-field { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
+.cp-socket-tile { display: block; padding: 0; width: min(100%, 88px); }
+.cp-socket-tile .tile { width: 100%; min-height: 0; aspect-ratio: 1; }
+/* A panel's preview (js/control-panels.js: openPanelPreview). */
+.preview-banner { display: flex; gap: 8px; align-items: flex-start; }
+.preview-banner .icon { flex: none; margin-top: 2px; color: var(--accent); }
 .tag.at-hand-tag { display: inline-flex; align-items: center; gap: 3px; }
 .tag.at-hand-tag .icon { width: 11px; height: 11px; }

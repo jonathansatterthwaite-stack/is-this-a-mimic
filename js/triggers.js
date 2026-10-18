@@ -168,6 +168,7 @@ clockwork.action("shop", { key: "shop", label: "Open or close a shop", level: "w
   run: (ctx, a) => {
     const shop = ctx.by === "gm" && typeof shopStore !== "undefined" ? shopStore.find(a.shop) : null;
     if (!shop) return { ok: false };
+    if (clockwork.practice.on) return { ok: true, message: `(${shop.name} would ${a.open ? "open" : "close"})` }; // (a practice run: not for real)
     if (!!shop.open !== !!a.open) shopStore.save({ ...clone(shop), open: !!a.open }).catch(() => {});
     return { ok: true };
   },
@@ -376,7 +377,7 @@ function controlUsed(panelId, controlId, value, signal = "", socket = null) {
   if (!rules.length) return;
   const messages = rules.flatMap(r => fireRule(ctx, r));
   store.update(() => {});
-  if (messages.length) toast(messages.join(" · "));
+  if (messages.length) toast((clockwork.practice.on ? "Practice: " : "") + messages.join(" · "));
 }
 
 // Run the rules of one character's items. Returns { changed, fired, messages }.
@@ -415,7 +416,8 @@ function runCharTriggers(char) {
 // many rules fired.
 let triggersRunning = false;
 function runTriggers() {
-  if (triggersRunning || !store.data) return 0;
+  // (not during a practice run: they'd act on its values, and change real things)
+  if (triggersRunning || !store.data || clockwork.practice.on) return 0;
   triggersRunning = true;
   try {
     let changed = false, fired = 0;
@@ -443,6 +445,7 @@ function hasWhileRules() {
     || levelContexts().some(({ ctx }) => clockwork.rulesFor(ctx, ruleKey).some(x => x.rule.when === "while")));
 }
 function runWhileRules(now = Date.now()) {
+  if (clockwork.practice.on) return; // (as runTriggers)
   const messages = [];
   let ran = false;
   const due = [];

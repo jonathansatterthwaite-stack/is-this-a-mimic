@@ -72,6 +72,7 @@ const ICONS = {
   eye: '<path d="M2.06 12.35a1 1 0 0 1 0-.7 10.75 10.75 0 0 1 19.88 0 1 1 0 0 1 0 .7 10.75 10.75 0 0 1-19.88 0"/><circle cx="12" cy="12" r="3"/>',
   "eye-off": '<path d="m3 3 18 18"/><path d="M10.6 5.1A10 10 0 0 1 12 5c6.5 0 10 7 10 7a17 17 0 0 1-3.2 3.9"/><path d="M6.6 6.6C3.7 8.4 2 12 2 12s3.5 7 10 7a9.7 9.7 0 0 0 5.4-1.6"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
   star: '<path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1L12 17l-5.4 2.9 1-6.1-4.4-4.3 6.1-.9z"/>',
+  play: '<path d="M8 5.5v13l10.5-6.5z"/>',
   more: '<circle cx="12" cy="12" r="1.3" fill="currentColor"/><circle cx="19" cy="12" r="1.3" fill="currentColor"/><circle cx="5" cy="12" r="1.3" fill="currentColor"/>',
   clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
   eyeOff: '<path d="M3 3l18 18M10.6 5.1A10.7 10.7 0 0 1 12 5c6 0 9.9 6.6 10 7a17 17 0 0 1-3 3.7M6.6 6.6C3.8 8.4 2.1 11.7 2 12c.1.4 4 7 10 7a9.6 9.6 0 0 0 4.4-1.1"/><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2"/>',
@@ -214,7 +215,8 @@ function openModal(title, body, { wide = false, footer = null, head = null, back
       document.body.classList.toggle("modal-open", root.children.length > 0);
     }
   };
-  const panel = h("div", { class: "modal" + (wide ? " wide" : "") + (backdrop ? " has-backdrop" : "") + (docked ? " docked" : ""), role: "dialog",
+  // (an item's details: dock, not a shared screen; the At hand drawer's handle steps aside for them)
+  const panel = h("div", { class: "modal" + (wide ? " wide" : "") + (backdrop ? " has-backdrop" : "") + (docked ? " docked" : "") + (dock && !minimise ? " item-details" : ""), role: "dialog",
     "aria-modal": docked ? "false" : "true", "aria-label": title },
     backdrop && h("div", { class: "modal-backdrop", "aria-hidden": "true" }, backdrop),
     h("div", { class: "modal-head" }, h("h2", null, title), head,
@@ -289,11 +291,11 @@ const ui = {
   gmTab: "controls", // the GM tab's sub-tab: "controls", "players" or "treasure"
   gmControlsTab: "panels", // Controls' own tabs: "panels", "values" or "connections"
   cwFocus: null, // the item the Clockwork tab shows first ("charId/uid", from its cog)
-  panelEdit: null, // the control panel being arranged (its id)
   boardView: {}, // boards' layers shown or hidden, locked or not ("panelId/ctlId/layerId" -> { hidden, locked })
   panelPick: {}, // the player chosen in each Players dropdown ("panelId/dropdownId" -> character id)
   panelTabs: {}, // the tabs chosen in each Tabs control ("panelId/tabsId" -> [tab id per level])
   settingsTab: "settings", // Settings · Campaigns · Files
+  panelAsPlayers: new Set(), // panels whose card shows them as players see them (their look: js/control-panels.js)
   itemsTab: "shops", // the Items tab's sub-tab: "shops", "catalog" or "treasure" (see itemsTabs)
   catTab: "items", // Catalog: All items · My items · Drawings · Templates
   role: readPref("mimic-role", "player"), // "gm" to prepare GM things outside a party (see isGmDevice)
@@ -699,6 +701,7 @@ function render() {
   refreshEntryDetails();
   syncTreasure(); // treasure being shown: pops up, redraws, comes back (js/treasure.js)
   syncShared(); // shared screens: the tray, its chips; something new opens (js/shared.js)
+  drawPanelPreview(); // a panel's preview follows its values and the panel (js/control-panels.js)
   takeDiscards();
   syncClocks(); // values moving over time keep the game tick going (js/clockwork.js)
 }
@@ -1532,7 +1535,7 @@ function entryTags(st, e, it, path) {
     it.visibility === "gm" && isGmDevice() && h("span", { class: "tag gm-only", title: "Players don't see it in their lists" }, "GM only"),
     statesOnFor(st.char, e).map(s => h("span", { class: "tag attuned" }, s.label.toLowerCase())),
     e.charges != null && h("span", { class: "tag" }, `${e.charges}/${it.maxCharges} charges`),
-    path && h("span", { class: "tag" }, path), isAtHand(st.char, e) && !st.atHandStrip && h("span", { class: "tag at-hand-tag", title: "Kept at hand (shared screens show it, to drop it into a socket or a trade)" }, icon("star"), "at hand"),
+    path && h("span", { class: "tag" }, path), isAtHand(st.char, e) && !st.atHandList && h("span", { class: "tag at-hand-tag", title: "Kept at hand: the At hand tab has it" }, icon("star"), "at hand"),
     st.tags?.(e)];
 }
 
@@ -2263,7 +2266,7 @@ function openEntry(entryUid, opts = {}) {
     // Its actions: its "used" rules' buttons (js/triggers.js).
     ...itemButtons(char, e).map(b => h("button", { class: "btn", onclick: () => { close(); pressAction(e.uid, b.label); } }, icon(buttonIcon(b.rule)), b.label)),
     party.active && h("button", { class: "btn", onclick: () => { close(); openShowItem(e.uid); } }, icon("eye"), "Show"),
-    party.active && !e.purse && h("button", { class: "btn", onclick: () => { close(); toggleAtHand(e.uid, char.id); } }, icon("star"), isAtHand(char, e) ? "Not at hand" : "Keep at hand"),
+    !e.purse && h("button", { class: "btn", onclick: () => { close(); toggleAtHand(e.uid, char.id); } }, icon("star"), isAtHand(char, e) ? "Not at hand" : "Keep at hand"),
     !e.purse && h("button", { class: "btn", onclick: () => { close(); openSell(e.uid); } }, icon("coins"), "Sell"),
     // Player mode: no editing items (a copy can still be renamed with its display name).
     editing() && h("button", { class: "btn", onclick: () => { close(); openItemForm(base, { entryUid: e.uid }); } }, icon("edit"), "Edit"),
@@ -4437,7 +4440,7 @@ const GUIDE_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimi
 
 // ------------------------------------------------------------------ updates
 // The version this copy is: tools/publish.py writes it into the published copy ("dev" here).
-const APP_VERSION = "1.0.9";
+const APP_VERSION = "1.0.10";
 const RELEASES_URL = "https://github.com/jonathansatterthwaite-stack/is-this-a-mimic/releases";
 const LATEST_API = "https://api.github.com/repos/jonathansatterthwaite-stack/is-this-a-mimic/releases/latest";
 const versionParts = v => String(v || "").replace(/^v/, "").split(".").map(n => parseInt(n, 10) || 0);
