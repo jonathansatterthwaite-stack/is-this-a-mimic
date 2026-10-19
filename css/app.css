@@ -351,7 +351,7 @@ svg.drawn-icon * { pointer-events: none; }
 /* Control panels (js/control-panels.js): the GM's grid of controls */
 .cp-wrap { overflow-x: auto; padding: 10px; container-type: inline-size; width: 100%; box-sizing: border-box; }
 /* Square cells: as large as the width allows, between 48 and 140 pixels. */
-.cp-grid { --gap: 6px; --cell: clamp(48px, calc((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols)), 140px);
+.cp-grid { --gap: 4px; --cell: clamp(20px, calc((100cqw - (var(--cols) - 1) * var(--gap)) / var(--cols)), 72px);
   display: grid; gap: var(--gap); width: max-content; margin: 0 auto;
   grid-template-columns: repeat(var(--cols), var(--cell)); grid-template-rows: repeat(var(--rows), var(--cell)); }
 .cp-cell { --cp: var(--accent); position: relative; min-width: 0; display: flex; flex-direction: column; justify-content: center; gap: 4px;
@@ -571,8 +571,15 @@ input.settle-n { width: 70px; flex: none; }
 .cp-type-icon { align-items: center; }
 .cp-readout { font-size: 1.15rem; }
 /* Arranging */
-.cp-empty { border: 1px dashed var(--border); border-radius: 10px; background: none; color: var(--muted); display: grid; place-items: center; cursor: pointer; }
-.cp-empty:hover { border-color: var(--accent); color: var(--accent); }
+/* Arranging (js/control-panels.js: placingLayer): the grid as lines, no gaps; a box dragged over it places a control. */
+.cp-grid.editing { --gap: 0px; position: relative; outline: 1px solid var(--border); }
+.cp-place { z-index: 0; cursor: crosshair; /* (touch: a swipe still scrolls; a tap places) */
+  background-image: linear-gradient(to right, var(--border) 1px, transparent 1px), linear-gradient(to bottom, var(--border) 1px, transparent 1px);
+  background-size: var(--cell) var(--cell); }
+.cp-grid.editing > .cp-cell { z-index: 1; }
+.cp-ghost { z-index: 2; pointer-events: none; border: 2px dashed var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.cp-ghost.clash { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 14%, transparent); }
+
 .cp-cell.arranging { outline: 1px dashed var(--accent); outline-offset: -1px; z-index: 1; }
 .cp-cell.dragging { opacity: .85; box-shadow: 0 6px 18px color-mix(in srgb, #000 25%, transparent); z-index: 2; }
 .cp-cell.clash { outline: 2px solid var(--bad); }
@@ -1237,7 +1244,7 @@ code { font-family: ui-monospace, Consolas, monospace; font-size: .92em; }
 .icon-btn.flip .icon { transform: rotate(180deg); }
 .trade-card { background: var(--surface); border: 1px solid var(--border); border-left: 4px solid var(--accent); border-radius: var(--radius); padding: 12px 14px; margin-bottom: 10px; }
 .trade-card.accepted { border-left-color: var(--good); }
-.trade-card.declined, .trade-card.cancelled, .trade-card.failed { border-left-color: var(--border); opacity: .8; }
+.trade-card.cancelled { border-left-color: var(--border); opacity: .8; }
 .trade-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .trade-head b { flex: 1; }
 .trade-sides { display: grid; grid-template-columns: max-content 1fr; gap: 2px 12px; margin: 0; font-size: .92rem; }
@@ -1812,8 +1819,8 @@ button.fm-node:hover { box-shadow: 0 0 0 2px color-mix(in srgb, var(--fmk) 35%, 
 .cp-socket .btn { padding: 3px 10px; min-height: 0; max-width: 100%; white-space: normal; text-align: center; } /* (a narrow socket: the button wraps inside it) */
 
 /* At hand (js/shared.js): a drawer against the top bar's middle (on a phone, a second bar on the
-   bottom one), pulled out and put away by its tab, which rides on its outer edge. Out, it takes its
-   room (--ah-push), and windows over everything leave it clear (--ah-over-top / -bottom). */
+   bottom one), pulled out and put away by its tab, which rides on its outer edge. Out, it opens over the
+   view (a phone: it takes its room, --ah-push), and windows over everything leave it clear (--ah-over-top / -bottom). */
 .at-hand { position: fixed; left: 50%; transform: translateX(-50%); z-index: 21; display: flex; flex-direction: column; align-items: center; pointer-events: none; }
 .at-hand[hidden] { display: none; }
 .at-hand > * { pointer-events: auto; }
@@ -1833,12 +1840,6 @@ body.at-hand-open .at-hand.covered { z-index: 56; } /* (out, it stays usable ove
 .at-hand-tab .icon { width: 15px; height: 15px; color: var(--accent); }
 .at-hand.open .at-hand-tab { box-shadow: none; }
 .at-hand-tab { min-width: 44px; justify-content: center; } /* (just a star) */
-main { transition: margin-top .25s ease; }
-@media (min-width: 721px) {
-  main { margin-top: var(--ah-push, 0px); }
-  main.wide > #panels, main.wide > #side, main.wide.has-dock > .dock { top: calc(72px + var(--ah-push, 0px)); }
-  main.wide > #panels, main.wide > #side, .modal.docked { max-height: calc(100vh - 88px - var(--ah-push, 0px)); }
-}
 .overlay { padding-top: calc(16px + var(--ah-over-top, 0px)); padding-bottom: calc(16px + var(--ah-over-bottom, 0px)); }
 .overlay .modal { max-height: min(88vh, 900px, calc(100vh - 32px - var(--ah-over-top, 0px) - var(--ah-over-bottom, 0px))); }
 @media (max-width: 720px) {
@@ -1860,6 +1861,13 @@ main { transition: margin-top .25s ease; }
   .at-hand.no-handle .at-hand-tab { display: none; }
 }
 .shared-panel, .trade-live { min-width: 0; max-width: 100%; }
+/* A panel's size (js/control-panels.js: PANEL_SIZES): a Phone panel at a phone's width everywhere; a Desktop panel the whole width. */
+.cp-wrap.size-phone { max-width: 420px; margin-inline: auto; }
+main.wide .cp-panel-list > .size-desktop { grid-column: 1 / -1; }
+@media (max-width: 720px) { /* a panel card's head: its name on a line of its own, its buttons under it */
+  .cp-card > .group-head { flex-wrap: wrap; row-gap: 6px; }
+  .cp-card > .group-head > .collapse { flex: 1 1 100%; }
+}
 /* A panel's look (js/control-panels.js: LOOK): as players see it (.cp-styled), each control's choices as lk- classes. */
 .cp-styled .cp-cell { font-size: 1rem; }
 .cp-styled .cp-cell .cp-label { font-size: .82em; }
@@ -1893,6 +1901,7 @@ main { transition: margin-top .25s ease; }
 .css-field { width: 100%; font-family: ui-monospace, Consolas, monospace; font-size: .85rem; }
 .cp-socket-tile { display: block; padding: 0; width: min(100%, 88px); }
 .cp-socket-tile .tile { width: 100%; min-height: 0; aspect-ratio: 1; }
+body.socket-dragging .view-inventory { outline: 2px dashed var(--accent); outline-offset: 4px; border-radius: 12px; } /* (a socket's item: drop it on the inventory to take it) */
 /* A panel's preview (js/control-panels.js: openPanelPreview). */
 .preview-banner { display: flex; gap: 8px; align-items: flex-start; }
 .preview-banner .icon { flex: none; margin-top: 2px; color: var(--accent); }

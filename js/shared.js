@@ -252,19 +252,21 @@ async function makePanelUse(s, u) {
   const panel = gmControls().find(p => p.id === s.panelId), ctl = panel?.controls?.find(c => c.id === u.control);
   const who = party.chars.find(c => c.id === u.character)?.name || "A player";
   const log = text => { const l = panelUseLog.get(panel.id) || []; l.push(text); panelUseLog.set(panel.id, l.slice(-10)); };
+  // (real, even while this device practises with a panel's preview: clockwork.practice.outside)
+  const real = fn => clockwork.practice.outside(fn);
   try {
     // (a socket's use is made already, on the host: its rules still run)
-    if (!panel || !ctl || ((!controlShown(panel) || !controlShown(ctl) || controlLocked(ctl)) && !u.socket)) return;
+    if (!panel || !ctl || (real(() => !controlShown(panel) || !controlShown(ctl) || controlLocked(ctl)) && !u.socket)) return;
     if (u.type === "set") {
       const at = panelUseAddress(panel, ctl, u.name);
-      if (at) { await clockwork.change(...at, u.value, "gm").done; log(`${who} set ${String(u.name).replace(/^(global|local|gm)_/, "")} to ${fmtNum(u.value)}`); }
+      if (at) { await real(() => clockwork.change(...at, u.value, "gm")).done; log(`${who} set ${String(u.name).replace(/^(global|local|gm)_/, "")} to ${fmtNum(u.value)}`); }
     } else if (u.socket) {
       // (the host has moved the item already: its rules see what, and whether it holds something now)
-      controlUsed(panel.id, ctl.id, undefined, "", { item: socketItemFacts(u.entry, u.contents), has: u.socket === "put" });
+      real(() => controlUsed(panel.id, ctl.id, undefined, "", { item: socketItemFacts(u.entry, u.contents), has: u.socket === "put" }));
       const what = u.entry ? entryName(u.entry) : "something";
       log(u.byGm ? `The ${term("gm")} gave ${what} back to ${who}` : `${who} ${u.socket === "put" ? "put" : "took"} ${what} ${u.socket === "put" ? "in" : "from"} ${controlName(ctl)}`);
     } else {
-      controlUsed(panel.id, ctl.id, typeof u.value === "number" ? u.value : undefined, u.signal || "");
+      real(() => controlUsed(panel.id, ctl.id, typeof u.value === "number" ? u.value : undefined, u.signal || ""));
       log(`${who} used ${controlName(ctl)}${u.signal ? ` (${u.signal})` : ""}`);
     }
   } finally {
@@ -336,8 +338,8 @@ function toggleAtHand(uid, charId = store.char()?.id) {
 const atHandTargets = e => sharedOpen?.targets && sharedOpen.close.panel?.isConnected ? sharedOpen.targets(e) : [];
 // The drawer: its tab pulls it out of the top bar (on a phone, up out of the bottom bar, a second bar
 // above it) and back. It stays out until its tab puts it away: through other tabs and windows, and
-// next time (kept on this device). Out, it takes its room: the view moves down (on a phone, up), and
-// a window over everything leaves it clear (the drawer then sits at the screen's edge).
+// next time (kept on this device). Out, it opens over the view (on a phone it takes its room, the
+// view ending above it), and a window over everything leaves it clear (the drawer then sits at the screen's edge).
 let atHandOpen = null; // (read from the device's settings once they're loaded)
 const AT_HAND_KEY = "mimic-at-hand";
 function setAtHandOpen(open) {
@@ -384,7 +386,8 @@ function drawAtHandTab() {
 }
 // Where it goes: against the top bar (a phone: on the bottom bar, or the shared chips above it); with
 // a window over everything, at the screen's edge. And the room it takes, out (its full height, not
-// as it slides): kept while a window covers it, so what's behind doesn't jump.
+// as it slides; on a phone only: elsewhere it opens over the view): kept while a window covers it, so
+// what's behind doesn't jump.
 let atHandPlacing = 0;
 // (the window resized, a phone turned: placed again, the next frame)
 addEventListener("resize", () => { if (!atHandPlacing) atHandPlacing = requestAnimationFrame(placeAtHand); });
@@ -401,7 +404,7 @@ function placeAtHand() {
   }
   const room = open ? Math.ceil(document.querySelector("#at-hand-pop > .at-hand-inner")?.offsetHeight || 0) + 1 : 0;
   const tabH = document.getElementById("at-hand-tab").offsetHeight; // (0 while it steps aside)
-  root.setProperty("--ah-push", room + "px");
+  root.setProperty("--ah-push", (phone ? room : 0) + "px"); // (a phone's second bottom bar takes its room; on a wide screen it opens over the view)
   root.setProperty("--ah-over-top", (open && covered && !phone ? room + tabH : 0) + "px");
   root.setProperty("--ah-over-bottom", (open && covered && phone ? room + tabH : 0) + "px");
 }

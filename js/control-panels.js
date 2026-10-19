@@ -674,7 +674,7 @@ function socketLive(panel, ctl, label) {
     !player && shared && held.by && { icon: "undo", label: "Give it back", run: () => call({ take: true }) }].filter(Boolean) : [];
   const box = h("div", { class: "cp-socket" + (top ? " full" : "") },
     label && h("span", { class: "cp-label" }, label),
-    top ? [socketTile(held, top, acts),
+    top ? [socketTile(held, top, acts, player && me ? acts[0].run : null),
         held.by && h("small", { class: "muted cp-note" }, player && held.by === me?.id ? "you put it in" : `put in by ${held.byName}`)]
       : [h("span", { class: "muted small cp-note" }, player ? "Drop an item here" : shared ? "Empty" : "Empty (players put things in once it's shown to them)"),
         player && me && h("button", { type: "button", class: "btn", onclick: () => pickEntries(`Put something in ${label || "it"}`, me, [], map => { const uid = [...map.keys()][0]; if (uid) put(uid); }) },
@@ -705,6 +705,46 @@ function socketLive(panel, ctl, label) {
 const MAX_TAB_LEVELS = 4;
 const isTabs = c => c?.type === "tabs";
 const panelItems = panel => panel.controls;
+// ------------------------------------------------------------------ sizes
+// A panel is one of two sizes (panel.size): Phone, 8 columns, for showing to players (drawn at a
+// phone's width everywhere, the GM's card too); or Desktop, 24 columns, the GM's own controls, as
+// wide as the screen. Rows: as many as it needs. Only a Phone panel can be shown to players.
+const PANEL_SIZES = { phone: { cols: 8, label: "Phone", words: "8 across: for showing to players" }, desktop: { cols: 24, label: "Desktop", words: "24 across: your own controls" } };
+const panelSize = p => p?.size === "desktop" ? "desktop" : "phone";
+const PANEL_ROWS_MAX = 96;
+// Fit a panel's controls to a size: each where it is if it fits; else narrowed to the width and
+// moved in from the right; else to the first free place, reading from the top (more rows if need be).
+function fitPanelTo(p, size) {
+  const cols = PANEL_SIZES[size].cols, placed = [], index = tabIndex(p);
+  p.size = size; p.cols = cols;
+  const free = (it, r) => r.x >= 0 && r.x + r.w <= cols && !placed.some(o => overlaps(o.r, r) && canShowTogether(p, o.it, it, index));
+  for (const it of [...panelItems(p)].sort((a, b) => a.y - b.y || a.x - b.x)) {
+    let r = { x: it.x, y: it.y, w: Math.min(it.w, cols), h: it.h };
+    if (r.x + r.w > cols) r.x = cols - r.w;
+    for (let y = 0; !free(it, r) && y < PANEL_ROWS_MAX * 4; y++) for (let x = 0; x + r.w <= cols; x++) { if (free(it, { ...r, x, y })) { r = { ...r, x, y }; break; } }
+    Object.assign(it, r);
+    placed.push({ it, r });
+  }
+  p.rows = Math.min(PANEL_ROWS_MAX, Math.max(1, p.rows || 1, ...placed.map(o => o.r.y + o.r.h)));
+}
+// Panels from before sizes (any number of columns): the nearer size (6 columns or fewer: Phone). A
+// sized panel from when its size had fewer columns (Phone 4, Desktop 12): every control's place
+// and size scaled up with the grid, so it looks just as it did.
+const panelNeedsSize = p => !PANEL_SIZES[p.size] || p.cols !== PANEL_SIZES[p.size].cols;
+function standardizePanels(s) {
+  let changed = false;
+  for (const p of s.gmControls || []) {
+    if (!panelNeedsSize(p)) continue;
+    const cols = PANEL_SIZES[p.size]?.cols, k = cols && p.cols ? cols / p.cols : 0;
+    if (Number.isInteger(k) && k > 1) {
+      for (const c of panelItems(p)) for (const key of ["x", "y", "w", "h"]) c[key] *= k;
+      p.cols = cols; p.rows = Math.min(PANEL_ROWS_MAX, (p.rows || 1) * k);
+    } else fitPanelTo(p, PANEL_SIZES[p.size] ? p.size : p.cols <= 6 ? "phone" : "desktop");
+    changed = true;
+  }
+  return changed;
+}
+
 const overlaps = (a, r) => a.x < r.x + r.w && r.x < a.x + a.w && a.y < r.y + r.h && r.y < a.y + a.h;
 const prefixOf = (a, b) => a.length <= b.length && a.every((x, i) => b[i] === x);
 
@@ -800,23 +840,68 @@ function panelGrid(panel, editing) {
   const grid = h("div", { class: ["cp-grid", editing && "editing", styled && "cp-styled", ...(styled ? lookClasses(panelLook(panel), true) : [])].filter(Boolean).join(" ") });
   grid.style.setProperty("--cols", panel.cols);
   grid.style.setProperty("--rows", panel.rows);
-  if (editing) {
-    // What's being arranged: the tabs chosen on screen.
-    const tab = tabHere(panel, index), here = { id: null, tab };
-    for (let y = 0; y < panel.rows; y++) for (let x = 0; x < panel.cols; x++) {
-      if (clashes(panel, here, { x, y, w: 1, h: 1 })) continue;
-      const cell = h("button", { type: "button", class: "cp-empty", title: "Add a control here", "aria-label": `Add a control at column ${x + 1}, row ${y + 1}`,
-        onclick: () => editPanelControl(panel, null, { x, y, tab }) }, icon("plus"));
-      placeCell(cell, { x, y, w: 1, h: 1 });
-      grid.append(cell);
-    }
-  }
+  if (editing) grid.append(placingLayer(panel, grid, index));
   for (const item of panelItems(panel)) if (showing(panel, item, index)) { const cell = controlCell(panel, item, specs, editing, grid); if (cell) grid.append(cell); }
   // Its background: behind the grid's cells, the size of the grid.
   const bg = bgLayer(panel.bg);
   if (bg) { grid.classList.add("has-bg"); grid.prepend(bg); }
   if (styled && panel.css) usePanelCss(panel);
-  return h("div", { class: "cp-wrap" + (styled && !panelLook(panel).frame ? " lk-noframe" : ""), ...(styled && panel.css ? { "data-panel-css": panel.id } : {}) }, grid);
+  return h("div", { class: `cp-wrap size-${panelSize(panel)}` + (styled && !panelLook(panel).frame ? " lk-noframe" : ""), ...(styled && panel.css ? { "data-panel-css": panel.id } : {}) }, grid);
+}
+
+// Arranging: the grid as lines (no gaps), and its empty space where a new control is placed: drag
+// a box over free cells (it turns red over another control or off the grid) and the new control
+// is that size; a click makes it as big as suits its kind (editPanelControl). On a touch screen a
+// tap places one (a swipe scrolls, as anywhere). The arrange bar's Add a control does the same from
+// the keyboard.
+function placingLayer(panel, grid, index = tabIndex(panel)) {
+  const tab = tabHere(panel, index), here = { id: null, tab };
+  const layer = h("div", { class: "cp-place", title: "Drag a box to place a control (or click a cell)" });
+  layer.style.gridColumn = "1 / -1"; layer.style.gridRow = "1 / -1";
+  const ghost = h("div", { class: "cp-ghost", hidden: true });
+  const cellAt = ev => { const r = grid.getBoundingClientRect();
+    return { x: Math.max(0, Math.min(panel.cols - 1, Math.floor((ev.clientX - r.left) / (r.width / panel.cols)))), y: Math.max(0, Math.min(panel.rows - 1, Math.floor((ev.clientY - r.top) / (r.height / panel.rows)))) }; };
+  const boxOf = (a, b) => ({ x: Math.min(a.x, b.x), y: Math.min(a.y, b.y), w: Math.abs(a.x - b.x) + 1, h: Math.abs(a.y - b.y) + 1 });
+  const bad = r => clashes(panel, here, r) || !fitsPanel(panel, r);
+  let start = null, box = null, moved = false, touch = false;
+  layer.addEventListener("pointerdown", ev => {
+    if (ev.button !== 0) return;
+    start = cellAt(ev);
+    if (clashes(panel, here, { ...start, w: 1, h: 1 })) { start = null; return; }
+    // (a touch: a tap, unless it turns into a scroll, which cancels it)
+    touch = ev.pointerType === "touch";
+    if (touch) { box = { ...start, w: 1, h: 1 }; moved = false; return; }
+    ev.preventDefault();
+    try { layer.setPointerCapture(ev.pointerId); } catch {}
+    holdRender(true);
+    box = { ...start, w: 1, h: 1 }; moved = false;
+    placeCell(ghost, box); ghost.hidden = false; ghost.classList.remove("clash");
+    grid.append(ghost);
+  });
+  layer.addEventListener("pointermove", ev => {
+    if (!start || touch) return;
+    const b = boxOf(start, cellAt(ev));
+    if (b.w === box.w && b.h === box.h && b.x === box.x && b.y === box.y) return;
+    box = b; moved = true;
+    placeCell(ghost, box); ghost.classList.toggle("clash", bad(box));
+  });
+  const end = () => {
+    if (!start) return;
+    const r = box, wasDrag = moved;
+    start = null;
+    if (!touch) { ghost.hidden = true; ghost.remove(); holdRender(false); }
+    if (wasDrag && bad(r)) return toast("That box covers another control (or goes off the panel): try again");
+    editPanelControl(panel, null, wasDrag ? { ...r, tab } : { x: r.x, y: r.y, tab });
+  };
+  layer.addEventListener("pointerup", end);
+  layer.addEventListener("pointercancel", () => { if (start) { start = null; if (!touch) { ghost.hidden = true; ghost.remove(); holdRender(false); } } });
+  return layer;
+}
+// The first free place for a new control, reading from the top (the arrange bar's Add a control).
+function firstFreeCell(panel) {
+  const here = { id: null, tab: tabHere(panel) };
+  for (let y = 0; y < panel.rows; y++) for (let x = 0; x < panel.cols; x++) if (!clashes(panel, here, { x, y, w: 1, h: 1 })) return { x, y, tab: here.tab };
+  return null;
 }
 
 function controlCell(panel, ctl, specs, editing, grid) {
@@ -906,17 +991,17 @@ function controlPanelCard(panel) {
   if (hidden && playMode()) return null;
   const toggle = () => { closed ? ui.collapsed.delete(key) : ui.collapsed.add(key); render(); };
   const where = tabsHereWords(panel);
-  return h("div", { class: "group gm-control-card cp-card" + (hidden ? " cp-hidden" : "") },
+  return h("div", { class: "group gm-control-card cp-card size-" + panelSize(panel) + (hidden ? " cp-hidden" : "") },
     h("div", { class: "group-head" },
       h("button", { class: "collapse" + (closed ? " closed" : ""), "aria-expanded": String(!closed), onclick: toggle }, icon("chevron"), h("h3", null, panel.name)),
       hidden && h("span", { class: "tag", title: "Its Shown when doesn't hold: Play mode hides it" }, "hidden now"),
       clockwork.practice.on && h("span", { class: "tag on", title: "A panel's preview is open: values show as they are in its practice run, until it's closed" }, "practice run"),
-      h("span", { class: "muted small" }, plural(panel.controls.length, "control")),
+      h("span", { class: "muted small" }, `${PANEL_SIZES[panelSize(panel)].label} · ${plural(panel.controls.length, "control")}`),
       !editing && panelItems(panel).length > 0 && iconBtn("eye", ui.panelAsPlayers?.has(panel.id) ? "Show it to work with (everything)" : "Show it as players see it (its look)", () => {
         ui.panelAsPlayers = new Set(ui.panelAsPlayers || []); ui.panelAsPlayers.has(panel.id) ? ui.panelAsPlayers.delete(panel.id) : ui.panelAsPlayers.add(panel.id); render(); },
         "look-toggle" + (ui.panelAsPlayers?.has(panel.id) ? " on" : "")),
       panelItems(panel).length > 0 && h("button", { class: "btn", title: "See it as players would, and try it out", onclick: () => openPanelPreview(panel) }, icon("play"), "Preview"),
-      party.active && isGmDevice() && !shownPanel(panel) && h("button", { class: "btn", onclick: () => openShowPanel(panel) }, icon("eye"), "Show to players…"),
+      party.active && isGmDevice() && !shownPanel(panel) && panelSize(panel) === "phone" && h("button", { class: "btn", onclick: () => openShowPanel(panel) }, icon("eye"), "Show to players…"),
       canEditNow() && iconBtn("edit", `Edit ${panel.name}`, () => editControlPanel(panel)),
       iconBtn("trash", `Delete ${panel.name}`, () => {
         const rules = rulesForGone(r => r.appliesTo?.panel === panel.id);
@@ -928,7 +1013,8 @@ function controlPanelCard(panel) {
     shownPanelBar(panel),
     !closed && [
       editing && h("div", { class: "cp-arrange-bar" },
-        h("p", { class: "muted small" }, "Click + to add a control (Tabs splits the panel into tabs). Drag a control to move it, or its corner to resize it; or select it and use the arrow keys (Shift to resize). The pencil edits it.",
+        h("button", { type: "button", class: "btn", onclick: () => { const at = firstFreeCell(panel); at ? editPanelControl(panel, null, at) : toast("No room left: add rows (the pencil above) or move something"); } }, icon("plus"), "Add a control"),
+        h("p", { class: "muted small" }, "Drag a box over the grid to place a control (or click a cell; Tabs splits the panel into tabs). Drag a control to move it, or its corner to resize it; or select it and use the arrow keys (Shift to resize). The pencil edits it.",
           where && [" Arranging ", h("b", null, where), ": choose another tab to arrange it."])),
       !panelItems(panel).length && !editing ? h("p", { class: "muted pad" }, "No controls yet: switch to Edit (the top bar) to add some.") : panelGrid(panel, editing),
     ]);
@@ -975,14 +1061,32 @@ function drawPanelPreview() {
     h("p", { class: "muted small" }, "Only this panel's rules run here. Items' rules and the world's wait until you close it, since they'd change real things."));
 }
 // What a socket holds, as a tile (the inventory's): tapped, its details with what can be done with it
-// here (acts: [{ icon, label, run }]); pressed and held, those as its menu.
-function socketTile(held, e, acts) {
+// here (acts: [{ icon, label, run }]); pressed and held, those as its menu. take: a player's, it drags
+// out onto their inventory (a wide screen), as one dropped in puts it there.
+function socketTile(held, e, acts, take = null) {
   const holder = { id: "socket", items: held.items, coins: {} };
   const open = () => { let close; close = openModal(entryName(e), itemDetails(currentItem(e, holder), null, e.srcId),
     { footer: [...acts.map(a => h("button", { class: "btn", onclick: () => { close(); a.run(); } }, icon(a.icon), a.label)), h("button", { class: "btn primary", onclick: () => close() }, "Done")] }); };
   const st = { char: holder, id: "socket", prefs: { show: { tiles: { details: false, tags: false, worth: false, weight: false } } }, open, menu: () => acts };
-  return h("div", { class: "cp-socket-tile tiles detail-minimal" }, entryTile(st, e));
+  const tile = entryTile(st, e);
+  if (take) {
+    tile.draggable = true;
+    tile.addEventListener("dragstart", ev => { ev.dataTransfer.setData("text/socket", e.uid); ev.dataTransfer.effectAllowed = "move"; socketDrag = take; document.body.classList.add("socket-dragging"); });
+    tile.addEventListener("dragend", () => { socketDrag = null; document.body.classList.remove("socket-dragging"); });
+  }
+  return h("div", { class: "cp-socket-tile tiles detail-minimal" }, tile);
 }
+// A socket's item being dragged out (its Take it): dropped anywhere on the inventory, taken. (In
+// the capture phase: the inventory's own drop zones would keep the drop to themselves.)
+let socketDrag = null;
+const onInventory = ev => !!ev.target.closest?.(".view-inventory, #panels");
+document.addEventListener("dragover", ev => { if (socketDrag && onInventory(ev)) { ev.preventDefault(); ev.dataTransfer.dropEffect = "move"; } }, true);
+document.addEventListener("drop", ev => {
+  if (!socketDrag || !onInventory(ev)) return;
+  ev.preventDefault(); ev.stopPropagation();
+  const take = socketDrag; socketDrag = null; document.body.classList.remove("socket-dragging");
+  take();
+}, true);
 // A socket in a preview: a test item from the catalog in, or out; either is "A control is used".
 function socketPreview(panel, ctl, label) {
   const held = socketHeld(panel, ctl), top = held?.items?.find(e => !e.parent);
@@ -1006,7 +1110,7 @@ function socketPreview(panel, ctl, label) {
 // The share showing this panel (from this device), if it's shown.
 const shownPanel = panel => (party.active ? party.shares || [] : []).find(s => s.kind === "panel" && s.fromMine && s.panelId === panel.id) || null;
 // A panel as it goes to players: as it is (its controls, drawings and pictures' ids).
-const panelForPlayers = panel => clone({ id: panel.id, kind: "panel", name: panel.name, cols: panel.cols, rows: panel.rows, controls: panel.controls,
+const panelForPlayers = panel => clone({ id: panel.id, kind: "panel", name: panel.name, size: panelSize(panel), cols: panel.cols, rows: panel.rows, controls: panel.controls,
   ...(panel.showIf ? { showIf: panel.showIf } : {}), ...(panel.bg ? { bg: panel.bg } : {}), ...(panel.display ? { display: panel.display } : {}), ...(panel.css ? { css: panel.css } : {}) });
 // Its pictures, so the players' devices can fetch them from the host.
 async function uploadPanelImages(panel) {
@@ -1093,23 +1197,26 @@ function controlRules(panel, ctl) {
 
 function editControlPanel(panel) {
   const isNew = !panel;
-  const draft = panel ? { name: panel.name, cols: panel.cols, rows: panel.rows, ...(panel.showIf ? { showIf: clone(panel.showIf) } : {}), ...(panel.bg ? { bg: clone(panel.bg) } : {}),
+  const draft = panel ? { name: panel.name, size: panelSize(panel), cols: panel.cols, rows: panel.rows, ...(panel.showIf ? { showIf: clone(panel.showIf) } : {}), ...(panel.bg ? { bg: clone(panel.bg) } : {}),
     ...(panel.display ? { display: clone(panel.display) } : {}), ...(panel.css ? { css: panel.css } : {}) }
-    : { name: "", cols: 6, rows: 4 };
+    : { name: "", size: "phone", cols: PANEL_SIZES.phone.cols, rows: 12 };
   let close;
   const num = (key, label, min, max) => h("label", { class: "field" }, h("span", null, label),
     h("input", { type: "number", min, max, step: 1, value: draft[key], onchange: e => { draft[key] = Math.max(min, Math.min(max, Math.round(+e.target.value || min))); e.target.value = draft[key]; } }));
   const save = () => {
     const name = draft.name.trim() || "Panel";
-    if (panel && panelItems(panel).some(c => !fitsPanel(draft, c))) return toast("Some controls or tabs would be outside the grid: move or remove them first");
+    const resized = panel && draft.size !== panelSize(panel);
+    draft.cols = PANEL_SIZES[draft.size].cols;
+    if (panel && !resized && panelItems(panel).some(c => !fitsPanel(draft, c))) return toast("Some controls or tabs would be below the last row: move or remove them first");
     if (draft.showIf && !clockwork.find(draft.showIf.value)) return toast("Shown when: choose a value (global.door, char.local.luck…)");
     close();
     if (isNew) {
-      const p = { id: "gc" + uid(), kind: "panel", name, cols: draft.cols, rows: draft.rows, controls: [], ...(draft.showIf ? { showIf: draft.showIf } : {}),
+      const p = { id: "gc" + uid(), kind: "panel", name, size: draft.size, cols: draft.cols, rows: draft.rows, controls: [], ...(draft.showIf ? { showIf: draft.showIf } : {}),
         ...(cleanBg(draft.bg) ? { bg: cleanBg(draft.bg) } : {}), ...(draft.display ? { display: draft.display } : {}), ...(draft.css?.trim() ? { css: draft.css.slice(0, 20000) } : {}) };
       commit(s => { s.gmControls = [...(s.gmControls || []), p]; }, `Made ${name}`);
     } else updatePanel(panel.id, p => {
-      Object.assign(p, { name, cols: draft.cols, rows: draft.rows });
+      Object.assign(p, { name, rows: draft.rows });
+      if (resized) fitPanelTo(p, draft.size); // (its controls refitted: kept where they fit, else moved)
       if (draft.showIf) p.showIf = draft.showIf; else delete p.showIf;
       const bg = cleanBg(draft.bg);
       if (bg) p.bg = bg; else delete p.bg;
@@ -1120,8 +1227,13 @@ function editControlPanel(panel) {
   close = openModal(isNew ? "New panel" : `Edit ${panel.name}`, h("div", { class: "form" },
     h("label", { class: "field" }, h("span", null, "Name"),
       h("input", { type: "text", value: draft.name, maxlength: 60, placeholder: "e.g. Ship's helm, Weather, Doom clock", oninput: e => { draft.name = e.target.value; } })),
-    h("div", { class: "form grid" }, num("cols", "Columns", 1, 12), num("rows", "Rows", 1, 24)),
-    h("p", { class: "muted small" }, "A grid for your controls: sliders, range sliders, switches, buttons, dropdowns, polygons, boards, pictures and text. Each sets a Global value or a player's or item's Local value."),
+    h("div", { class: "form grid" },
+      h("label", { class: "field" }, h("span", null, "Size"),
+        h("select", { onchange: e => { draft.size = e.target.value; } }, Object.entries(PANEL_SIZES).map(([k, z]) => h("option", { value: k, selected: k === draft.size }, `${z.label}: ${z.words}`)))),
+      num("rows", "Rows", 1, PANEL_ROWS_MAX)),
+    h("p", { class: "muted small" }, "A grid for your controls: sliders, range sliders, switches, buttons, dropdowns, polygons, boards, pictures and text. Each sets a Global value or a player's or item's Local value. "
+      + "A Phone panel is 8 cells across, drawn at a phone's width: the size to show to players. A Desktop panel is 24 across, as wide as your screen: your own controls."
+      + (panel ? " Changing the size keeps each control where it fits, and moves the rest below." : "")),
     bgField(draft, "Background (behind its controls)"),
     condField(draft, "showIf", "Shown when", "Always shown", "Only while…", "Hidden while it doesn't hold (Edit mode still shows it, marked). A rule shows it by setting the value."),
     lookField(draft), cssField(draft, panel?.id)),
@@ -1174,7 +1286,9 @@ function rehomeControls(panel, before) {
 // Add (at: the empty cell clicked) or edit one control.
 function editPanelControl(panel, ctl, at) {
   const isNew = !ctl;
-  const draft = ctl ? clone(ctl) : { id: "c" + uid(), type: "slider", x: at.x, y: at.y, w: 1, h: 1, scope: "party", target: "", name: "",
+  // (a new one: the box drawn for it, else sized for its kind when it's saved)
+  const drawn = !ctl && !!at?.w;
+  const draft = ctl ? clone(ctl) : { id: "c" + uid(), type: "slider", x: at.x, y: at.y, w: drawn ? at.w : 1, h: drawn ? at.h : 1, scope: "party", target: "", name: "",
     ...(at.tab ? { tab: at.tab } : {}) };
   // The dropdown's choices as typed: [{ label, value }] of strings (see choicesFromRows).
   const rows = (draft.options?.length ? draft.options : [{ label: "", value: "" }, { label: "", value: "" }])
@@ -1419,11 +1533,11 @@ function editPanelControl(panel, ctl, at) {
       if (!draft.items.length) return toast("Tabs need at least one tab");
       if (draft.style === "horizontal") delete draft.turn;
     } else { delete draft.levels; delete draft.items; delete draft.style; delete draft.turn; }
-    if (isNew) {
-      // As wide as suits it (a slider likes two cells), where there's room.
+    if (isNew && !drawn) {
+      // Clicked, not drawn: as big as suits its kind (the cells are small), where there's room.
       const big = draft.type === "board" || draft.type === "polygon";
-      const want = big ? 3 : draft.type === "tabs" ? Math.min(panel.cols, 4) : draft.type === "slider" || draft.type === "range" ? 2 : 1;
-      const tall = big ? 3 : draft.type === "tabs" ? draft.levels : 1;
+      const want = big ? 6 : draft.type === "tabs" ? Math.min(panel.cols, 8) : draft.type === "slider" || draft.type === "range" ? 4 : 2;
+      const tall = big ? 6 : draft.type === "tabs" ? draft.levels : 2;
       const room = (w, ht) => fitsPanel(panel, { ...draft, w, h: ht }) && !clashes(panel, draft, { ...draft, w, h: ht });
       outer: for (let ht = tall; ht >= 1; ht--) for (let w = want; w >= 1; w--) if (room(w, ht)) { draft.w = w; draft.h = ht; break outer; }
     }

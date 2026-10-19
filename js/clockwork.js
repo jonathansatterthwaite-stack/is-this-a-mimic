@@ -427,6 +427,13 @@ clockwork.practice = {
   get on() { return !!practising; },
   start() { practising = {}; previewMerged = null; setTimeout(render); },
   end() { if (!practising) return; practising = null; previewMerged = null; setTimeout(render); },
+  // What's real even during one (a player's use of a shown panel, made on this device): fn runs
+  // with the real values, and what it sets (as it starts: putValue) goes to them.
+  outside(fn) {
+    const keep = practising;
+    practising = null; previewMerged = null;
+    try { return fn(); } finally { practising = keep; previewMerged = null; }
+  },
 };
 
 // Live icons follow a preview once a frame, however fast the pointer moves.

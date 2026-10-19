@@ -82,6 +82,8 @@ function gmControlsPage() {
 
 function gmControlsSection() {
   const list = gmControls();
+  // (panels from before sizes: the nearer size, once: js/control-panels.js, standardizePanels)
+  if (list.some(panelNeedsSize)) queueMicrotask(() => commit(s => { standardizePanels(s); }));
   return h("section", { class: "gm-controls" },
     h("div", { class: "section-head" }, h("h2", null, "Panels"),
       editing() && h("button", { class: "btn primary", onclick: () => editControlPanel(null) }, icon("plus"), "New panel")),
