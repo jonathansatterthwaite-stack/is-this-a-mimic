@@ -894,7 +894,10 @@ function placingLayer(panel, grid, index = tabIndex(panel)) {
     editPanelControl(panel, null, wasDrag ? { ...r, tab } : { x: r.x, y: r.y, tab });
   };
   layer.addEventListener("pointerup", end);
-  layer.addEventListener("pointercancel", () => { if (start) { start = null; if (!touch) { ghost.hidden = true; ghost.remove(); holdRender(false); } } });
+  // (cancelled, or the pointer lost some other way: never left holding the app's redraws)
+  const cancel = () => { if (start) { start = null; if (!touch) { ghost.hidden = true; ghost.remove(); holdRender(false); } } };
+  layer.addEventListener("pointercancel", cancel);
+  layer.addEventListener("lostpointercapture", () => { if (start && !touch) setTimeout(cancel); });
   return layer;
 }
 // The first free place for a new control, reading from the top (the arrange bar's Add a control).
